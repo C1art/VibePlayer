@@ -6,6 +6,7 @@ use crossbeam::channel::Receiver;
 
 use crate::actions::Action;
 
+pub mod single_instance;
 #[cfg(windows)]
 mod windows;
 

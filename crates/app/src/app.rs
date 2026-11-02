@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+
+use crossbeam::channel::Receiver;
 use std::time::{Duration, Instant};
 
 use cut::{StreamIndex, Ticks};
@@ -43,6 +45,8 @@ pub struct VibePlayerApp {
     pub(crate) media_controls: MediaControls,
     pub(crate) fullscreen: bool,
     pub(crate) editor: Option<Editor>,
+    /// Files sent by later launches of the app.
+    pub(crate) instance_requests: Option<Receiver<PathBuf>>,
 }
 
 impl VibePlayerApp {
@@ -50,6 +54,7 @@ impl VibePlayerApp {
         creation: &eframe::CreationContext<'_>,
         store: Option<Store>,
         initial_file: Option<PathBuf>,
+        instance_requests: Option<Receiver<PathBuf>>,
     ) -> VibePlayerApp {
         theme::apply(&creation.egui_ctx);
         let settings = store.as_ref().map(Store::load_settings).unwrap_or_default();
@@ -76,6 +81,7 @@ impl VibePlayerApp {
             media_controls: MediaControls::new(creation),
             fullscreen: false,
             editor: None,
+            instance_requests,
         };
         app.updates.start_automatic(&app.settings);
         if let Some(path) = initial_file {
@@ -249,6 +255,15 @@ impl eframe::App for VibePlayerApp {
                 .find(|path| !path.as_os_str().is_empty())
         }) {
             actions.push(Action::Open(path));
+        }
+        if let Some(requests) = &self.instance_requests {
+            for path in requests.try_iter() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                if !path.as_os_str().is_empty() {
+                    actions.push(Action::Open(path));
+                }
+            }
         }
         if let Some(dialog) = &self.open_dialog
             && let Some(choice) = dialog.poll()

@@ -11,6 +11,7 @@ A light, fast video player for Windows 11 with a bare-bones lossless trimmer.
   copied video can only begin on a keyframe. Changing volume or the 3-band EQ re-encodes the
   audio only.
 - **Stays out of the way.** Controls fade while playing; everything has a shortcut (`F1`).
+  Opening another file from Explorer reuses the window that's already open.
 
 ## Install
 

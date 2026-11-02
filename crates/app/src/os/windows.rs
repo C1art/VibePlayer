@@ -276,3 +276,131 @@ impl MediaControls {
         }
     }
 }
+
+/// Single-instance forwarding over a per-user named pipe.
+pub(super) mod single_instance {
+    use std::fs::{File, OpenOptions};
+    use std::io::{Read, Write};
+    use std::os::windows::io::FromRawHandle;
+    use std::thread;
+    use std::time::Duration;
+
+    use windows::Win32::Foundation::{
+        ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, HANDLE,
+    };
+    use windows::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_INBOUND};
+    use windows::Win32::System::Pipes::{
+        ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+        PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT, WaitNamedPipeW,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{ASFW_ANY, AllowSetForegroundWindow};
+    use windows::core::HSTRING;
+
+    use super::super::single_instance::{Claim, Deliver, MAX_REQUEST};
+
+    /// The first pipe instance, created while claiming.
+    pub struct Listener(HANDLE);
+
+    // SAFETY: a pipe handle can be used from any thread; only the listener thread uses it.
+    unsafe impl Send for Listener {}
+
+    /// Per user, so another account can't open files in this one's player. The default pipe
+    /// security also only lets the creating user write to it.
+    fn pipe_name() -> String {
+        let user: String = std::env::var("USERNAME")
+            .unwrap_or_default()
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect();
+        format!(r"\\.\pipe\VibePlayer-{user}")
+    }
+
+    fn create_instance(name: &HSTRING, first: bool) -> windows::core::Result<HANDLE> {
+        let mut mode = PIPE_ACCESS_INBOUND;
+        if first {
+            mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
+        }
+        // SAFETY: the name is a valid wide string; default security attributes.
+        let handle = unsafe {
+            CreateNamedPipeW(
+                name,
+                mode,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                PIPE_UNLIMITED_INSTANCES,
+                0,
+                MAX_REQUEST as u32,
+                0,
+                None,
+            )
+        };
+        if handle.is_invalid() {
+            return Err(windows::core::Error::from_thread());
+        }
+        Ok(handle)
+    }
+
+    pub fn claim(message: &str) -> Claim {
+        let name = pipe_name();
+        let wide = HSTRING::from(name.as_str());
+        for _ in 0..10 {
+            match OpenOptions::new().write(true).open(&name) {
+                Ok(mut pipe) => {
+                    // Lets the running instance bring its window to the front.
+                    // SAFETY: no preconditions.
+                    let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
+                    if pipe.write_all(format!("{message}\n").as_bytes()).is_ok() {
+                        return Claim::Forwarded;
+                    }
+                }
+                Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY.0 as i32) => {
+                    // SAFETY: the name is a valid wide string.
+                    let _ = unsafe { WaitNamedPipeW(&wide, 500) };
+                    continue;
+                }
+                Err(_) => {}
+            }
+            match create_instance(&wide, true) {
+                Ok(handle) => {
+                    return Claim::Primary(Some(super::super::single_instance::Listener::windows(
+                        Listener(handle),
+                    )));
+                }
+                // Another instance owns the pipe but was between connections; ask again.
+                Err(error) if error.code() == ERROR_ACCESS_DENIED.to_hresult() => {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                Err(_) => return Claim::Primary(None),
+            }
+        }
+        Claim::Primary(None)
+    }
+
+    pub fn serve(listener: Listener, deliver: &Deliver) {
+        let name = HSTRING::from(pipe_name().as_str());
+        let mut current = listener.0;
+        loop {
+            // SAFETY: `current` is a pipe instance we created and still own.
+            let ready = match unsafe { ConnectNamedPipe(current, None) } {
+                Ok(()) => true,
+                // The client connected between creating the instance and this call.
+                Err(error) => error.code() == ERROR_PIPE_CONNECTED.to_hresult(),
+            };
+            // Open the next instance before reading, so a launch now still finds a listener.
+            let next = create_instance(&name, false);
+            // SAFETY: we own `current` and hand it to the File, which closes it when dropped.
+            let pipe = unsafe { File::from_raw_handle(current.0) };
+            if ready {
+                let mut request = Vec::new();
+                if pipe.take(MAX_REQUEST).read_to_end(&mut request).is_ok()
+                    && !deliver.deliver(&request)
+                {
+                    return;
+                }
+            }
+            match next {
+                Ok(handle) => current = handle,
+                Err(_) => return,
+            }
+        }
+    }
+}

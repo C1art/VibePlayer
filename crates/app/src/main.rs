@@ -33,6 +33,10 @@ use eframe::wgpu;
 
 fn main() -> eframe::Result {
     let initial_file = std::env::args_os().nth(1).map(PathBuf::from);
+    let listener = match os::single_instance::claim(initial_file.as_deref()) {
+        os::single_instance::Claim::Forwarded => return Ok(()),
+        os::single_instance::Claim::Primary(listener) => listener,
+    };
     let store = library::Store::open_default().ok();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -53,10 +57,12 @@ fn main() -> eframe::Result {
         "VibePlayer",
         options,
         Box::new(move |creation| {
+            let requests = listener.map(|listener| listener.start(creation.egui_ctx.clone()));
             Ok(Box::new(app::VibePlayerApp::new(
                 creation,
                 store,
                 initial_file,
+                requests,
             )))
         }),
     )

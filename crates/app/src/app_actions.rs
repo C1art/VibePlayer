@@ -21,7 +21,17 @@ impl VibePlayerApp {
                     }
                 }
             }
-            Action::Open(path) => self.open(path, now),
+            Action::Open(path) => {
+                if self
+                    .editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.is_exporting())
+                {
+                    self.osd.show("Finish or cancel the export first");
+                } else {
+                    self.open(path, now);
+                }
+            }
             Action::CloseFile => {
                 self.close_file();
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title("VibePlayer".into()));
