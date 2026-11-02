@@ -79,3 +79,5 @@ Root: HKA; Subkey: "Software\Classes\Applications\{#AppExeName}\SupportedTypes";
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; In-app updates run silently after VibePlayer has closed itself; start it again afterwards.
+Filename: "{app}\{#AppExeName}"; Flags: nowait; Check: WizardSilent
