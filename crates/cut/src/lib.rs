@@ -4,6 +4,6 @@
 mod plan;
 pub mod time;
 
-pub use plan::{CutError, CutPlan, TrimRequest};
+pub use plan::{CutError, CutPlan, ReencodedHead, TrimRequest};
 
 pub use time::{ClockPrecision, ClockTime, FrameIndex, SampleRate, StreamIndex, Ticks, Timebase};

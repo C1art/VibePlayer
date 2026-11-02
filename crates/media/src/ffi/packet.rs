@@ -96,6 +96,33 @@ impl Packet {
         unsafe { std::slice::from_raw_parts(raw.data, len) }
     }
 
+    /// Replaces the payload, keeping timestamps, flags and stream index.
+    pub fn replace_data(&mut self, data: &[u8]) -> Result<(), MediaError> {
+        let size = std::ffi::c_int::try_from(data.len())
+            .map_err(|_| MediaError::Unsupported("packet too large".into()))?;
+        let mut fresh = Packet::new()?;
+        // SAFETY: `fresh` is an empty packet; av_new_packet gives it a buffer of `size` bytes
+        // (plus padding) that we fill completely below.
+        unsafe {
+            super::check(
+                sys::av_new_packet(fresh.as_mut_ptr(), size),
+                "av_new_packet",
+            )?;
+            std::ptr::copy_nonoverlapping(data.as_ptr(), fresh.raw_mut().data, data.len());
+            super::check(
+                sys::av_packet_copy_props(fresh.as_mut_ptr(), self.as_ptr()),
+                "av_packet_copy_props",
+            )?;
+        }
+        let (pts, dts, duration, index) =
+            (self.pts(), self.dts(), self.duration(), self.stream_index());
+        fresh.set_timestamps(pts, dts);
+        fresh.set_duration(duration);
+        fresh.set_stream_index(index);
+        std::mem::swap(self, &mut fresh);
+        Ok(())
+    }
+
     pub fn try_clone(&self) -> Result<Packet, MediaError> {
         // SAFETY: the source packet is valid; av_packet_clone returns a new reference or null.
         let ptr = unsafe { sys::av_packet_clone(self.as_ptr()) };

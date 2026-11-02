@@ -109,6 +109,14 @@ impl VideoFrame {
         self.frame.plane(index)
     }
 
+    pub(crate) fn frame(&self) -> &Frame {
+        &self.frame
+    }
+
+    pub(crate) fn frame_mut(&mut self) -> &mut Frame {
+        &mut self.frame
+    }
+
     /// Display width over height, including non-square pixels.
     pub fn display_aspect(&self) -> f32 {
         let (num, den) = self.frame.sample_aspect_ratio();

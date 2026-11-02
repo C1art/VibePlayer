@@ -216,3 +216,37 @@ fn keyframe_lookup_finds_the_gop_start_before_a_target() {
         Some(at(1.0))
     );
 }
+
+#[test]
+#[ignore]
+fn keyframe_span_counts_frames_until_the_next_keyframe() {
+    let mut demuxer = Demuxer::open(&fixture("h264_bframes.mp4")).unwrap();
+    let stream = demuxer.best_stream(StreamKind::Video).unwrap();
+    let timebase = demuxer.timebase(stream).unwrap();
+    let at = |seconds: f64| Ticks::from_display_seconds(seconds, timebase);
+    let span = demuxer.keyframes_around(stream, at(2.6)).unwrap();
+    assert_eq!(span.before, Some(at(2.0)));
+    assert_eq!(span.after, Some(at(3.0)));
+    // 2.60, 2.64, … 2.96: ten frames at 25 fps.
+    assert_eq!(span.frames_until_after, 10);
+}
+
+#[test]
+#[ignore]
+fn a_full_scan_finds_every_keyframe() {
+    let mut demuxer = Demuxer::open(&fixture("h264_bframes.mp4")).unwrap();
+    let stream = demuxer.best_stream(StreamKind::Video).unwrap();
+    let mut keyframes = Vec::new();
+    demuxer
+        .scan_all_keyframes(stream, |batch| {
+            keyframes.extend(batch);
+            true
+        })
+        .unwrap();
+    let timebase = demuxer.timebase(stream).unwrap();
+    let seconds: Vec<f64> = keyframes
+        .iter()
+        .map(|k| k.display_seconds(timebase))
+        .collect();
+    assert_eq!(seconds, [0.0, 1.0, 2.0, 3.0]);
+}

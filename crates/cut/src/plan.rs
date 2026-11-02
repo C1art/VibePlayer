@@ -11,8 +11,9 @@ pub struct TrimRequest {
     pub end: Ticks,
 }
 
-/// Where a lossless cut actually lands. The start moves back to a keyframe because copied
-/// video can only begin on one; the UI shows this before export.
+/// Where a cut actually lands. A lossless cut moves the start back to a keyframe, because
+/// copied video can only begin on one; a smart cut keeps the start and re-encodes the frames up
+/// to the next keyframe instead. The UI shows either before export.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CutPlan {
     pub stream: StreamIndex,
@@ -20,6 +21,17 @@ pub struct CutPlan {
     pub requested_start: Ticks,
     pub start: Ticks,
     pub end: Ticks,
+    /// Set for smart cuts: the head of the cut that is re-encoded.
+    pub reencode: Option<ReencodedHead>,
+}
+
+/// The frames a smart cut re-encodes: decoded from `decode_from` (the keyframe before the
+/// start), kept from the start up to `until` (the next keyframe, or the end).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReencodedHead {
+    pub decode_from: Ticks,
+    pub until: Ticks,
+    pub frames: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,7 +68,33 @@ impl TrimRequest {
             requested_start: self.start,
             start,
             end: self.end,
+            reencode: None,
         })
+    }
+
+    /// Plans a frame-accurate cut that re-encodes from the start to `next_keyframe` (or the end,
+    /// if that comes first). `frames` is how many frames that is. Falls back to a plain
+    /// lossless plan when the start already is a keyframe.
+    pub fn plan_smart(
+        &self,
+        keyframe_before: Option<Ticks>,
+        next_keyframe: Option<Ticks>,
+        frames: u32,
+    ) -> Result<CutPlan, CutError> {
+        if keyframe_before == Some(self.start) {
+            return self.plan(keyframe_before);
+        }
+        let mut plan = self.plan(keyframe_before)?;
+        let decode_from = plan.start;
+        plan.start = self.start;
+        plan.reencode = Some(ReencodedHead {
+            decode_from,
+            until: next_keyframe
+                .filter(|&next| next > self.start && next < self.end)
+                .unwrap_or(self.end),
+            frames,
+        });
+        Ok(plan)
     }
 }
 
@@ -82,11 +120,18 @@ impl CutPlan {
     /// before the start keyframe (open-GOP leading frames) can't be decoded without the
     /// previous GOP, so they go. Frames shown after the end are kept only if they're decoded
     /// before it, because frames inside the range may reference them.
+    /// With a smart cut, only packets from the next keyframe on are copied.
     pub fn keeps_primary(&self, pts: Ticks, dts: Option<Ticks>) -> bool {
-        if pts < self.start {
+        let copy_from = self.copy_from();
+        if pts < copy_from || copy_from >= self.end {
             return false;
         }
         pts < self.end || dts.is_some_and(|dts| dts < self.end)
+    }
+
+    /// Where byte-for-byte copying of the primary stream begins.
+    pub fn copy_from(&self) -> Ticks {
+        self.reencode.map_or(self.start, |head| head.until)
     }
 
     /// Whether a packet of any other stream, stamped in `timebase`, belongs in the output.
@@ -190,6 +235,40 @@ mod tests {
         let audio = Timebase::new(1, 48_000).unwrap();
         assert_eq!(plan.rebase(Ticks(240_000), audio), Ticks::ZERO);
         assert_eq!(plan.rebase(Ticks(5_040), ms()), Ticks(40));
+    }
+
+    #[test]
+    fn smart_cuts_keep_the_start_and_copy_from_the_next_keyframe() {
+        let plan = request(5_300, 9_000)
+            .plan_smart(Some(Ticks(5_000)), Some(Ticks(6_000)), 18)
+            .unwrap();
+        assert_eq!(plan.start, Ticks(5_300));
+        assert_eq!(plan.start_shift(), Ticks::ZERO);
+        let head = plan.reencode.unwrap();
+        assert_eq!(
+            (head.decode_from, head.until, head.frames),
+            (Ticks(5_000), Ticks(6_000), 18)
+        );
+        assert!(!plan.keeps_primary(Ticks(5_960), Some(Ticks(5_920))));
+        assert!(plan.keeps_primary(Ticks(6_000), Some(Ticks(5_920))));
+        assert_eq!(plan.rebase(Ticks(6_000), ms()), Ticks(700));
+    }
+
+    #[test]
+    fn smart_cuts_starting_on_a_keyframe_stay_lossless() {
+        let plan = request(5_000, 9_000)
+            .plan_smart(Some(Ticks(5_000)), Some(Ticks(6_000)), 0)
+            .unwrap();
+        assert_eq!(plan.reencode, None);
+    }
+
+    #[test]
+    fn a_smart_cut_inside_one_gop_re_encodes_everything_and_copies_nothing() {
+        let plan = request(5_300, 5_800)
+            .plan_smart(Some(Ticks(5_000)), Some(Ticks(6_000)), 12)
+            .unwrap();
+        assert_eq!(plan.reencode.unwrap().until, Ticks(5_800));
+        assert!(!plan.keeps_primary(Ticks(6_000), Some(Ticks(5_700))));
     }
 
     #[test]

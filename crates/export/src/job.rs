@@ -24,6 +24,8 @@ pub struct ExportRequest {
 pub struct ExportResult {
     pub output: PathBuf,
     pub reencoded_audio: bool,
+    /// Video frames re-encoded at the start by a smart cut.
+    pub reencoded_frames: usize,
     /// Of the written file, in microseconds.
     pub duration: Ticks,
 }
@@ -119,6 +121,7 @@ pub fn run(
         Ok(ExportResult {
             output: request.output.clone(),
             reencoded_audio: remuxed.reencoded_audio,
+            reencoded_frames: remuxed.reencoded_frames,
             duration,
         })
     });

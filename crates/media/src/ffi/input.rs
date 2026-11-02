@@ -406,6 +406,17 @@ impl<'a> CodecParams<'a> {
         u64::try_from(self.raw.bit_rate).ok().filter(|&b| b > 0)
     }
 
+    /// Codec setup data, e.g. an H.264 `avcC` record with SPS and PPS.
+    pub fn extradata(&self) -> &'a [u8] {
+        let len = usize::try_from(self.raw.extradata_size).unwrap_or(0);
+        if self.raw.extradata.is_null() || len == 0 {
+            return &[];
+        }
+        // SAFETY: FFmpeg guarantees `extradata_size` readable bytes at `extradata`, owned by
+        // the parameters, which outlive `'a`.
+        unsafe { std::slice::from_raw_parts(self.raw.extradata, len) }
+    }
+
     pub(super) fn raw(&self) -> &'a sys::AVCodecParameters {
         self.raw
     }

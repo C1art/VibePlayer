@@ -92,6 +92,16 @@ impl Frame {
         raw.best_effort_timestamp = raw.pts;
     }
 
+    /// Forgets the picture type the decoder assigned, so an encoder chooses its own.
+    pub fn clear_picture_type(&mut self) {
+        // SAFETY: exclusive access through `&mut self`.
+        unsafe { self.ptr.as_mut() }.pict_type = sys::AVPictureType::AV_PICTURE_TYPE_NONE;
+    }
+
+    pub(super) fn raw_color_range(&self) -> sys::AVColorRange {
+        self.raw().color_range
+    }
+
     pub fn duration(&self) -> Ticks {
         Ticks(self.raw().duration.max(0))
     }

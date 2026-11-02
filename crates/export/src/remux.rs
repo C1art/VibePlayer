@@ -8,6 +8,7 @@ use media::{
 };
 
 use crate::ExportError;
+use crate::smart::SmartHead;
 
 /// Audio edits that force audio, and only audio, to be re-encoded.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -46,6 +47,7 @@ struct Reencode {
 }
 
 pub(crate) struct Remuxed {
+    pub reencoded_frames: usize,
     pub streams: usize,
     pub reencoded_audio: bool,
 }
@@ -130,7 +132,21 @@ pub(crate) fn remux(
         .collect();
     let streams = mapped.len();
     demuxer.select_streams(&mapped);
-    demuxer.seek_stream(plan.stream, plan.start)?;
+    let mut head = match plan.reencode {
+        Some(reencoded) => Some(SmartHead::new(&demuxer, plan, reencoded.until)?),
+        None => None,
+    };
+    let primary_output = match outputs.get(plan.stream.0) {
+        Some(Some(Output::Copy {
+            index,
+            input_timebase,
+            output_timebase,
+        })) => Some((*index, *input_timebase, *output_timebase)),
+        _ => None,
+    };
+    let mut reencoded_frames = 0;
+    let decode_from = plan.reencode.map_or(plan.start, |head| head.decode_from);
+    demuxer.seek_stream(plan.stream, decode_from)?;
 
     let mut packet = Packet::new()?;
     let mut finished = vec![false; outputs.len()];
@@ -168,6 +184,17 @@ pub(crate) fn remux(
                     if let Some(fraction) = fraction_done(plan, pts) {
                         progress(fraction);
                     }
+                    if let Some(active) = &mut head {
+                        active.feed(&packet, plan)?;
+                        if active.is_finished()
+                            && let Some(finished_head) = head.take()
+                        {
+                            reencoded_frames = finished_head.write(&mut muxer, |packet| {
+                                restamp(packet, plan, timebase, out_timebase, out_index);
+                            })?;
+                        }
+                        continue;
+                    }
                     plan.keeps_primary(pts, dts)
                 } else {
                     plan.keeps_other(pts, timebase)
@@ -201,6 +228,12 @@ pub(crate) fn remux(
             break;
         }
     }
+    if let (Some(mut unfinished), Some((index, input, output))) = (head.take(), primary_output) {
+        unfinished.finish()?;
+        reencoded_frames = unfinished.write(&mut muxer, |packet| {
+            restamp(packet, plan, input, output, index);
+        })?;
+    }
     for output in outputs.iter_mut().flatten() {
         if let Output::Encode(reencode) = output {
             reencode.feed(None, plan, &mut muxer)?;
@@ -210,6 +243,7 @@ pub(crate) fn remux(
     muxer.finish()?;
     progress(1.0);
     Ok(Remuxed {
+        reencoded_frames,
         streams,
         reencoded_audio,
     })

@@ -287,6 +287,77 @@ impl CodecContext {
         Ok(context)
     }
 
+    /// Opens the video encoder named `name` for frames like `first`, copying color and aspect
+    /// signalling from `source`. Writes codec headers in-band (no global header) so encoded
+    /// packets can be spliced into a stream that carries different ones. No B-frames, and one
+    /// keyframe at the start.
+    pub fn video_encoder(
+        name: &str,
+        source: &CodecParams<'_>,
+        first: &Frame,
+        timebase: Timebase,
+        frame_rate: Option<(i32, i32)>,
+        options: &[(&str, &str)],
+    ) -> Result<CodecContext, MediaError> {
+        let name_c = super::c_string(name)?;
+        // SAFETY: the name is NUL-terminated; returns a static codec or null.
+        let encoder = unsafe { sys::avcodec_find_encoder_by_name(name_c.as_ptr()) };
+        if encoder.is_null() {
+            return Err(MediaError::NoEncoder(name.to_owned()));
+        }
+        let format = super::pixel_format(first.format())
+            .ok_or_else(|| MediaError::Unsupported("frame pixel format".into()))?;
+        let context = CodecContext::allocate(encoder)?;
+        let raw = context.ptr.as_ptr();
+        let params = source.raw();
+        let (aspect_num, aspect_den) = first.sample_aspect_ratio();
+        let mut dictionary = ptr::null_mut();
+        // SAFETY: the context is unopened and exclusively ours; option strings are
+        // NUL-terminated; the dictionary is freed after opening whatever happens.
+        unsafe {
+            (*raw).width = c_int::try_from(first.width()).unwrap_or(0);
+            (*raw).height = c_int::try_from(first.height()).unwrap_or(0);
+            (*raw).pix_fmt = format;
+            (*raw).time_base = super::rational(timebase);
+            if let Some((num, den)) = frame_rate {
+                (*raw).framerate = sys::AVRational { num, den };
+            }
+            (*raw).sample_aspect_ratio = sys::AVRational {
+                num: aspect_num.max(0),
+                den: aspect_den.max(1),
+            };
+            // The decoded frames' range wins: conversions on the way may have changed it.
+            (*raw).color_range = match first.raw_color_range() {
+                sys::AVColorRange::AVCOL_RANGE_UNSPECIFIED => params.color_range,
+                range => range,
+            };
+            (*raw).colorspace = params.color_space;
+            (*raw).color_primaries = params.color_primaries;
+            (*raw).color_trc = params.color_trc;
+            (*raw).chroma_sample_location = params.chroma_location;
+            (*raw).max_b_frames = 0;
+            (*raw).gop_size = 100_000;
+            (*raw).thread_count = 0;
+            for (key, value) in options {
+                let (key, value) = (super::c_string(key)?, super::c_string(value)?);
+                sys::av_dict_set(&mut dictionary, key.as_ptr(), value.as_ptr(), 0);
+            }
+            let code = sys::avcodec_open2(raw, encoder, &mut dictionary);
+            sys::av_dict_free(&mut dictionary);
+            check(code, "avcodec_open2")?;
+        }
+        Ok(context)
+    }
+
+    /// Whether FFmpeg has an encoder by this name.
+    pub fn encoder_exists(name: &str) -> bool {
+        let Ok(name) = super::c_string(name) else {
+            return false;
+        };
+        // SAFETY: the name is NUL-terminated; returns a static codec or null.
+        !unsafe { sys::avcodec_find_encoder_by_name(name.as_ptr()) }.is_null()
+    }
+
     /// Samples per frame the encoder requires, or `None` if any size is accepted.
     pub fn frame_size(&self) -> Option<u32> {
         // SAFETY: the codec pointer of an opened context is a valid static codec.
