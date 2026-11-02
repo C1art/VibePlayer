@@ -10,16 +10,10 @@ use media::{AudioEffects, Decibels, Equalizer, Speed, Subtitle, VideoFrame, Vide
 use crate::messages::{Command, DecodedVideo, Event, Opened, Shared};
 use crate::reader::{self, ReaderSetup};
 use crate::subtitle_list::SubtitleList;
-use crate::{AudioReading, Clock, FrameQueue, Generation, PlaybackError, Shown, Timed};
+use crate::{AudioReading, Clock, FrameQueue, Generation, PlaybackError, Shown};
 
 /// Decoded frames the video thread may get ahead of the screen.
 const FRAMES_AHEAD: usize = 4;
-
-impl Timed for VideoFrame {
-    fn pts(&self) -> Ticks {
-        self.pts
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeekMode {
@@ -321,17 +315,19 @@ impl Player {
             return;
         }
         let video_done = !self.has_video() || (self.video_ended && self.queue.pending() == 0);
+        // A device that vanished never drains its queue, so it can't hold up the end.
+        let audio_drained =
+            |audio: &AudioControl| audio.queued_frames() == 0 || audio.is_device_lost();
         let audio_done = !self.has_audio()
-            || (self.audio_ended && self.audio.as_ref().is_none_or(|a| a.queued_frames() == 0));
-        if video_done && audio_done {
+            || (self.audio_ended && self.audio.as_ref().is_none_or(audio_drained));
+        let past_end = self
+            .duration()
+            .is_some_and(|d| self.position() > d + Ticks(1_000_000));
+        if video_done && (audio_done || past_end) {
             self.ended = true;
             self.pause();
-            if let Some(duration) = self.duration() {
-                let end = self
-                    .current_frame()
-                    .map_or(duration, |f| f.pts.max(self.position()));
-                self.clock.jump(now, end.min(duration));
-            }
+            let end = self.duration().unwrap_or(self.position());
+            self.clock.jump(now, end);
         }
     }
 

@@ -31,6 +31,20 @@ impl StreamParams {
         Ok(params)
     }
 
+    pub fn try_clone(&self) -> Result<StreamParams, MediaError> {
+        // SAFETY: no preconditions; null means allocation failure.
+        let ptr = NonNull::new(unsafe { sys::avcodec_parameters_alloc() })
+            .ok_or(MediaError::OutOfMemory)?;
+        let copy = StreamParams {
+            ptr,
+            timebase: self.timebase,
+        };
+        // SAFETY: both parameter structs are valid and distinct.
+        let code = unsafe { sys::avcodec_parameters_copy(ptr.as_ptr(), self.ptr.as_ptr()) };
+        check(code, "avcodec_parameters_copy")?;
+        Ok(copy)
+    }
+
     pub fn view(&self) -> CodecParams<'_> {
         // SAFETY: the pointer is valid for the lifetime of `self`.
         CodecParams::from_raw(unsafe { self.ptr.as_ref() })

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use audio::{AudioControl, AudioOutput, Volume};
 use crossbeam::channel::{Receiver, Sender};
@@ -12,6 +12,8 @@ use crate::{AudioAnchor, Generation};
 
 /// How far ahead of the device we decode. Short, so EQ and speed changes are heard quickly.
 const QUEUE_AHEAD_MICROS: i64 = 200_000;
+/// How often to try reopening a lost output device.
+const DEVICE_RETRY: Duration = Duration::from_secs(1);
 /// A timestamp jump bigger than this starts a new anchor.
 const DISCONTINUITY_MICROS: i64 = 200_000;
 
@@ -39,8 +41,11 @@ struct Anchored {
 
 struct Worker {
     target: AudioTarget,
+    params: Option<StreamParams>,
     decoder: Option<AudioDecoder>,
     sink: Sink,
+    events: Sender<Event>,
+    last_device_retry: Option<Instant>,
 }
 
 /// Everything on the device side of the decoder.
@@ -70,6 +75,9 @@ fn run(setup: Setup) {
     let target = AudioTarget::playback(format.sample_rate.0, format.channels);
     let mut worker = Worker {
         decoder: None,
+        params: None,
+        events: setup.events.clone(),
+        last_device_retry: None,
         target,
         sink: Sink {
             control,
@@ -120,12 +128,45 @@ fn run(setup: Setup) {
 
 impl Worker {
     fn set_stream(&mut self, params: Option<StreamParams>) {
+        self.params = params;
+        self.rebuild_decoder();
+    }
+
+    fn rebuild_decoder(&mut self) {
         let effects = self.sink.shared.audio_effects.load();
-        self.decoder = params.and_then(|p| AudioDecoder::new(p, self.target.clone(), effects).ok());
+        self.decoder = self
+            .params
+            .as_ref()
+            .and_then(|p| p.try_clone().ok())
+            .and_then(|p| AudioDecoder::new(p, self.target.clone(), effects).ok());
         self.sink.anchored = None;
     }
 
+    /// Reopens the default device after the current one disappeared (e.g. headphones
+    /// unplugged). Until then audio is dropped and the player follows the system clock.
+    fn recover_device(&mut self) {
+        let retry_due = self
+            .last_device_retry
+            .is_none_or(|last| last.elapsed() >= DEVICE_RETRY);
+        if !self.sink.control.is_device_lost() || !retry_due {
+            return;
+        }
+        self.last_device_retry = Some(Instant::now());
+        let Ok(output) = AudioOutput::open_default(Volume::default()) else {
+            return;
+        };
+        let control = output.control();
+        let format = output.format();
+        let _ = self.events.send(Event::AudioReady(control.clone()));
+        self.sink.output = output;
+        self.sink.control = control;
+        self.sink.shared.audio_anchor.store(None);
+        self.target = AudioTarget::playback(format.sample_rate.0, format.channels);
+        self.rebuild_decoder();
+    }
+
     fn decode(&mut self, packet: Option<&media::Packet>) {
+        self.recover_device();
         let Some(decoder) = &mut self.decoder else {
             return;
         };
@@ -171,6 +212,9 @@ impl Sink {
         while !remaining.is_empty() {
             if self.shared.is_stale(self.generation) {
                 return false;
+            }
+            if self.control.is_device_lost() {
+                return true;
             }
             let ahead = self
                 .control

@@ -8,6 +8,12 @@ pub trait Timed {
     fn pts(&self) -> Ticks;
 }
 
+impl Timed for media::VideoFrame {
+    fn pts(&self) -> Ticks {
+        self.pts
+    }
+}
+
 /// Decoded frames waiting to be shown, and the one on screen.
 pub struct FrameQueue<F> {
     pending: VecDeque<F>,
