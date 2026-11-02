@@ -2,7 +2,24 @@
 
 ## Project
 
-A video and media player for Windows 11, built in Rust, with lossless cutting. Goal: playback on par with mpv/MPC-HC, and cut/trim/join without re-encoding like LosslessCut. No subtitle support.
+A light video player for Windows 11, built in Rust, with a bare-bones clip trimmer. Its main job is quality playback of video files; its second is fast, lossless clip cutting. It is not a video editor.
+
+## Product
+
+Two modes in one window:
+
+- **Player** (default): opens straight to the video; controls auto-hide. Play/pause, skip ±, frame step, playback speed, volume/mute, audio track, embedded subtitle track, fullscreen, media keys, HDR, and a file info panel (container, codecs, resolution, frame rate, bitrate, duration, metadata).
+- **Editor** (via "Edit"): trim one clip with in/out points, adjust volume and a basic audio EQ, export. Nothing else.
+
+Around them:
+
+- **Default player:** registers its file types so the user can pick it as the app that opens videos.
+- **Installer:** a normal Windows installer that registers file types and an uninstaller.
+- **Update check:** checks for a newer release in the background and offers "Update", "Ask later" or "Skip this version".
+
+Priorities, in order: lightweight (fast startup, low idle CPU and memory), a clean modern UI, then features. When in doubt, leave it out.
+
+Out of scope: joining files, smart cut, speed changes in export, playlists, adding or editing subtitles, any other editing.
 
 ## Stack
 
@@ -15,6 +32,7 @@ A video and media player for Windows 11, built in Rust, with lossless cutting. G
 - Persistence: `serde` + `serde_json`
 - Windows APIs: `windows` (D3D12/DXGI texture sharing, HDR output, SMTC, taskbar, file associations), as a `cfg(windows)` dependency
 - Exe resources: `embed-resource` (build dependency of `app`) for the exe's icon and version info
+- Installer and update-check tooling: not chosen yet
 - Ask before adding any dependency not listed here.
 
 ## Structure
@@ -28,8 +46,10 @@ Cargo workspace. Dependencies flow downward only; `cut` and `library` never depe
 - `crates/audio/` — cpal output, resampling, volume, EQ, downmix
 - `crates/thumbnails/` — background seek-bar previews with a bounded cache
 - `crates/cut/` — cut planning: segments, keyframe snapping, timestamp rebasing (pure logic, no I/O)
-- `crates/export/` — runs a cut plan through `media`: stream copy, smart cut, join, verification
-- `crates/library/` — settings, recents, resume positions, playlists, cut sessions in `%APPDATA%\Clplay`
+- `crates/export/` — runs a cut plan through `media`: stream copy, audio-only re-encode for volume/EQ, verification
+- `crates/update/` — release check, version comparison, ask-later and skipped-version rules
+- `crates/library/` — settings, recents, resume positions, cut sessions, update preferences in `%APPDATA%\Clplay`
+- `installer/` — Windows installer definition
 - `tests/fixtures/` — small media files used by integration tests
 
 ## Commands
@@ -58,7 +78,9 @@ After every change, in this order:
 - **Seeking:** seek to the prior keyframe, decode and discard to the target. Scrubbing uses keyframes only. A generation counter discards stale frames after each seek.
 - **Hardware decode:** fall back to software on any failure, mid-stream included, silently.
 - **Color:** use the stream's own matrix, primaries, transfer and range. HDR passes through as scRGB `Rgba16Float` or is tone mapped to SDR.
-- **Lossless cut:** never re-encodes; packets are copied byte-for-byte. Smart cut is opt-in and states how many frames it re-encodes.
+- **Lossless cut:** video is never re-encoded; its packets are copied byte-for-byte. Audio is copied too unless the user changed volume or EQ; then only the audio is re-encoded, and the export screen says so.
+- **Subtitles:** play embedded subtitle tracks only (text and bitmap). Never load, add or edit subtitle files. Export copies subtitle streams like any other.
+- **Updates:** check on a worker, never at the cost of startup time. Never download or install without the user choosing "Update".
 - **Keyframes:** the UI shows where a cut actually lands before export. Never move a cut point silently.
 - **Export:** keep every stream, metadata and chapters unless dropped by the user; rebase timestamps to zero. Write to a temp file, verify by probing, then rename. Never overwrite a source.
 - **Bad media:** files are untrusted. Corrupt input yields an error or a skipped frame, never a panic or hang.
@@ -76,7 +98,7 @@ After every change, in this order:
 
 ## Testing
 
-- Test what can break in non-obvious ways: timebase math, keyframe snapping, cut planning and rebasing, seek generations, frame stepping, playlist parsing, settings migrations, audio buffer sizing.
+- Test what can break in non-obvious ways: timebase math, keyframe snapping, cut planning and rebasing, seek generations, frame stepping, version comparison and update prompts, settings migrations, audio buffer sizing.
 - Lossless export tests check copied packets are byte-identical to the source and the output probes as planned.
 - Don't test egui layout, trivial accessors, derived impls or third-party behavior. One test per behavior.
 - Tests needing a GPU or real decoding are `#[ignore]` and use `tests/fixtures/` (each file under 1 MB; cover open GOP, B-frames, VFR, interlaced, multiple audio tracks, HDR, MP4/MKV/TS, a truncated file).
@@ -93,7 +115,7 @@ After every change, in this order:
 Ignored tests in `crates/app/src/smoke_tests/` that print a report and need no screen. Run with `cargo test --release -p app <n> -- --ignored --nocapture`.
 
 - `playback_speed`, `seek_latency`, `frame_step_back`, `thumbnail_generation` — `PLAY_BENCH_FILES` (`;`-separated), `PLAY_BENCH_SOFTWARE_DECODE=1`
-- `export_speed` — `PLAY_BENCH_FILES`, `PLAY_BENCH_SEGMENTS` (default 10), `PLAY_BENCH_SMART_CUT=1`
+- `export_speed` — `PLAY_BENCH_FILES`, `PLAY_BENCH_SEGMENTS` (default 10)
 - `random_seeks_never_panic`, `corrupt_files_never_panic`, `a_long_session_levels_off`; `_with_a_gpu` variants need a GPU
 
 ## Commits
@@ -109,6 +131,7 @@ Ignored tests in `crates/app/src/smoke_tests/` that print a report and need no s
 - Block the UI thread or audio callback — use a worker.
 - Let FFmpeg pointers or `unsafe` escape `media/src/ffi/` — add a safe wrapper.
 - Use floating-point time in the model — use `Ticks`.
-- Re-encode in a lossless cut or move a cut point without showing it.
+- Re-encode video in an export, or move a cut point without showing it.
+- Grow the editor beyond trimming, volume and EQ.
 - Overwrite a source file — temp file, verify, rename.
 - Panic on bad media — return an error or skip the frame.
