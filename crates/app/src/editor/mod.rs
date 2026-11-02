@@ -3,6 +3,7 @@
 mod keyframes;
 mod panel;
 mod timeline;
+mod waveform;
 
 use std::path::{Path, PathBuf};
 
@@ -16,6 +17,7 @@ use crate::os::PendingDialog;
 pub use panel::{EditorAction, HEIGHT, show as show_panel};
 
 use keyframes::{KeyframeFinder, KeyframeIndex};
+use waveform::Waveform;
 
 /// Editor state for the open file. Positions are microseconds from the start of the file,
 /// like the player's; cut points are converted to the primary stream's ticks for export.
@@ -31,6 +33,7 @@ pub struct Editor {
     pub equalizer: Equalizer,
     keyframes: KeyframeFinder,
     index: KeyframeIndex,
+    waveform: Option<Waveform>,
     pub snap_to_keyframes: bool,
     pub smart_cut: bool,
     /// Why smart cut can't be used for this file, if it can't.
@@ -42,8 +45,10 @@ pub struct Editor {
 
 impl Editor {
     /// `None` for files without a video or audio stream to cut on.
+    /// `audio` is the track to draw a waveform for, usually the one playing.
     pub fn new(
         info: &MediaInfo,
+        audio: Option<StreamIndex>,
         session: Option<&CutSession>,
         preferences: &EditorPreferences,
     ) -> Option<Editor> {
@@ -65,6 +70,7 @@ impl Editor {
             equalizer: Equalizer::default(),
             keyframes: KeyframeFinder::new(info.path.clone(), primary.index),
             index: KeyframeIndex::new(info.path.clone(), primary.index),
+            waveform: audio.map(|stream| Waveform::new(info.path.clone(), stream, duration)),
             snap_to_keyframes: preferences.snap_to_keyframes,
             smart_cut: preferences.smart_cut,
             smart_cut_unavailable: export::smart_cut_support(info, primary.index).err(),
@@ -122,6 +128,15 @@ impl Editor {
     /// Keyframe positions found so far, in player microseconds.
     pub fn keyframe_positions(&self) -> impl Iterator<Item = Ticks> + '_ {
         self.index.keyframes().iter().map(|&k| self.to_position(k))
+    }
+
+    /// Peak loudness per equal slice of the file, while it's being computed too.
+    pub fn waveform(&self) -> &[f32] {
+        self.waveform.as_ref().map_or(&[], Waveform::peaks)
+    }
+
+    pub fn waveform_complete(&self) -> bool {
+        self.waveform.as_ref().is_none_or(Waveform::is_complete)
     }
 
     pub fn keyframes_complete(&self) -> bool {
@@ -264,6 +279,9 @@ impl Editor {
     /// Advances the save dialog and the running export. Returns whether anything changed.
     pub fn poll(&mut self) -> bool {
         let mut changed = self.index.poll();
+        if let Some(waveform) = &mut self.waveform {
+            changed |= waveform.poll();
+        }
         if let Some(dialog) = &self.save_dialog
             && let Some(choice) = dialog.poll()
         {
