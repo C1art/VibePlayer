@@ -5,9 +5,9 @@
 VibePlayer: a light Windows 11 video player in Rust with a bare-bones lossless clip trimmer. Its main job is quality playback; its second is fast clip cutting. It is not a video editor.
 
 - **Player** (default): opens straight to the video; controls auto-hide. Play/pause, skip ±, frame step, playback speed, volume/mute, audio track, embedded subtitle track, fullscreen, media keys, HDR, and a file info panel (container, codecs, resolution, frame rate, bitrate, duration, metadata).
-- **Editor** (via "Edit"): trim one clip with in/out points, adjust volume and a basic audio EQ, export. Nothing else.
-- **Installer:** standard Windows installer and uninstaller; registers file types so the user can choose VibePlayer to open videos.
-- **Update check:** runs in the background and offers "Update", "Ask later" or "Skip this version".
+- **Editor** (via "Edit"): trim one clip with in/out points, adjust volume and a basic audio EQ, export. Nothing else. EQ exists only here; the player has plain volume.
+- **Installer:** Inno Setup installer and uninstaller; registers file types so the user can choose VibePlayer to open videos.
+- **Update check:** looks for a newer GitHub release of `c1art/vibeplayer` and offers "Update", "Ask later" or "Skip this version".
 
 Priorities, in order: lightweight (fast startup, low idle CPU and memory), clean modern UI, features. When in doubt, leave it out.
 
@@ -24,7 +24,8 @@ Out of scope: joining files, smart cut, speed changes in export, playlists, addi
 - Persistence: `serde` + `serde_json`
 - Windows: `windows` crate, `cfg(windows)` only — D3D12/DXGI texture sharing, HDR output, SMTC, taskbar, file associations
 - Exe resources: `embed-resource` (build dependency of `app`) — icon and version info
-- Installer and update-check tooling: not chosen yet
+- Installer: Inno Setup 6
+- Update check: `ureq` (HTTPS client) against the GitHub Releases API, `semver` for version comparison
 - Ask before adding any dependency not listed here.
 
 ## Structure
@@ -35,19 +36,20 @@ Cargo workspace. Dependencies flow downward only; `cut` and `library` never depe
 - `crates/media/` — FFmpeg wrapper: probe, demux, decode, filter, remux. All FFmpeg `unsafe` lives in `media/src/ffi/`
 - `crates/playback/` — engine: clock, decode scheduling, seeking, frame stepping, speed
 - `crates/render/` — wgpu presentation, color conversion, HDR; shaders in `render/shaders/*.wgsl`
-- `crates/audio/` — cpal output, resampling, volume, EQ, downmix
+- `crates/audio/` — cpal output, resampling, volume, downmix, EQ (editor preview only)
 - `crates/thumbnails/` — background seek-bar previews with a bounded cache
-- `crates/cut/` — cut planning: segments, keyframe snapping, timestamp rebasing (pure logic, no I/O)
+- `crates/cut/` — cut planning: in/out points, keyframe snapping, timestamp rebasing (pure logic, no I/O)
 - `crates/export/` — runs a cut plan through `media`: stream copy, audio-only re-encode for volume/EQ, verification
-- `crates/update/` — release check, version comparison, ask-later and skipped-version rules
+- `crates/update/` — release check, version comparison, ask-later and skipped-version rules, installer download
 - `crates/library/` — settings, recents, resume positions, cut sessions, update preferences in `%APPDATA%\VibePlayer`
-- `installer/` — Windows installer definition
+- `installer/` — Inno Setup script (`vibeplayer.iss`)
 - `tests/fixtures/` — small media files for integration tests
 
 ## Commands
 
 - Run: `cargo run -p app [-- <file>]`
 - Release: `cargo build --release`
+- Installer: `iscc installer/vibeplayer.iss` (after a release build)
 - Format: `cargo fmt --all`
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings`
 - Test: `cargo test -p <crate>` or `cargo test --workspace`
@@ -70,7 +72,7 @@ After every change, in order: format, lint, test the changed crate. Test the who
   - The UI shows where each cut actually lands before export. Never move a cut point silently.
   - Keep every stream (subtitles included), metadata and chapters unless the user drops them. Rebase timestamps to zero.
   - Write to a temp file, verify by probing, then rename. Never overwrite a source.
-- **Updates:** check on a worker without slowing startup. Download or install only after the user picks "Update".
+- **Updates:** check on a worker at most once a day, never slowing startup. "Update" downloads the release's installer, runs it and exits; nothing downloads or installs otherwise. "Ask later" asks again on the next check. "Skip this version" stays quiet until a newer one. A failed check is silent.
 - **Bad media:** files are untrusted. Corrupt input yields an error or a skipped frame, never a panic or hang.
 - **FFmpeg:** raw pointers live in owning types with `Drop`; only safe APIs leave `media/src/ffi/`. Every `unsafe` block has a `// SAFETY:` comment.
 - **Persisted files:** versioned; new fields use `#[serde(default)]`; breaking changes add a migration in `library`.
@@ -95,7 +97,7 @@ After every change, in order: format, lint, test the changed crate. Test the who
 Ignored tests in `crates/app/src/smoke_tests/` that print a report and need no screen. Run with `cargo test --release -p app <name> -- --ignored --nocapture`.
 
 - `playback_speed`, `seek_latency`, `frame_step_back`, `thumbnail_generation` — `PLAY_BENCH_FILES` (`;`-separated), `PLAY_BENCH_SOFTWARE_DECODE=1`
-- `export_speed` — `PLAY_BENCH_FILES`, `PLAY_BENCH_SEGMENTS` (default 10)
+- `export_speed` — `PLAY_BENCH_FILES`, `PLAY_BENCH_AUDIO_REENCODE=1` (apply a volume change)
 - `random_seeks_never_panic`, `corrupt_files_never_panic`, `a_long_session_levels_off`; `_with_a_gpu` variants need a GPU
 
 ## Working in this repo
@@ -109,5 +111,5 @@ Ignored tests in `crates/app/src/smoke_tests/` that print a report and need no s
 [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/): `<type>(<scope>): <description>` — imperative, lowercase, no trailing period.
 
 - Types: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `build`, `ci`, `chore`, `style`
-- Scope is the crate name: `feat(cut): snap segment start to previous keyframe`
+- Scope is the crate name: `feat(cut): snap trim start to previous keyframe`
 - Breaking changes: `!` after the scope and a `BREAKING CHANGE:` footer
