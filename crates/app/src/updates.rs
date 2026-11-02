@@ -89,8 +89,7 @@ impl Updates {
             return false;
         };
         let mut changed = false;
-        egui::Window::new("Update available")
-            .collapsible(false)
+        crate::widgets::window("Update available")
             .resizable(false)
             .title_bar(false)
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-20.0, -124.0))
@@ -120,7 +119,9 @@ impl Updates {
                     let (received, total) = download.progress();
                     let fraction = total.map_or(0.0, |t| received as f32 / t.max(1) as f32);
                     ui.add(egui::ProgressBar::new(fraction).text("Downloading…"));
-                    if ui.button("Cancel").clicked() {
+                    if crate::widgets::button(ui, crate::widgets::Kind::Secondary, None, "Cancel")
+                        .clicked()
+                    {
                         download.cancel();
                     }
                     ctx.request_repaint();
@@ -130,9 +131,8 @@ impl Updates {
                     ui.label(RichText::new(status).color(theme::DANGER));
                 }
                 ui.horizontal(|ui| {
-                    let update =
-                        egui::Button::new(RichText::new("Update").strong()).fill(theme::ACCENT);
-                    if ui.add(update).clicked() {
+                    use crate::widgets::{Kind, button};
+                    if button(ui, Kind::Primary, None, "Update").clicked() {
                         match release.installer.clone() {
                             Some(asset) if cfg!(windows) => {
                                 self.status = None;
@@ -141,10 +141,10 @@ impl Updates {
                             _ => ctx.open_url(egui::OpenUrl::new_tab(&release.page)),
                         }
                     }
-                    if ui.button("Ask later").clicked() {
+                    if button(ui, Kind::Secondary, None, "Ask later").clicked() {
                         self.offer = None;
                     }
-                    if ui.button("Skip this version").clicked() {
+                    if button(ui, Kind::Ghost, None, "Skip this version").clicked() {
                         settings.updates.skipped_version = Some(release.version.to_string());
                         self.offer = None;
                         changed = true;

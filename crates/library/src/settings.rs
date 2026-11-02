@@ -15,6 +15,7 @@ pub struct Settings {
     /// Seconds jumped by the arrow keys.
     pub seek_step_seconds: u32,
     pub updates: UpdatePreferences,
+    pub editor: EditorPreferences,
 }
 
 impl Default for Settings {
@@ -27,8 +28,19 @@ impl Default for Settings {
             resume_playback: true,
             seek_step_seconds: 5,
             updates: UpdatePreferences::default(),
+            editor: EditorPreferences::default(),
         }
     }
+}
+
+/// Trim editor choices that carry over between files.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EditorPreferences {
+    /// Move the start handle to the nearest keyframe while dragging.
+    pub snap_to_keyframes: bool,
+    /// Re-encode from the start to the next keyframe instead of moving the start back.
+    pub smart_cut: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

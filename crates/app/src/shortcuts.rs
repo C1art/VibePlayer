@@ -121,9 +121,8 @@ pub const HELP: &[(&str, &str)] = &[
 ];
 
 pub fn show_help(ctx: &egui::Context, open: &mut bool) {
-    egui::Window::new("Keyboard shortcuts")
+    crate::widgets::window("Keyboard shortcuts")
         .open(open)
-        .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .show(ctx, |ui| {
@@ -132,11 +131,7 @@ pub fn show_help(ctx: &egui::Context, open: &mut bool) {
                 .spacing([24.0, 6.0])
                 .show(ui, |ui| {
                     for (keys, what) in HELP {
-                        ui.label(
-                            egui::RichText::new(*keys)
-                                .monospace()
-                                .color(crate::theme::ACCENT_SOFT),
-                        );
+                        crate::widgets::chip(ui, keys);
                         ui.label(*what);
                         ui.end_row();
                     }

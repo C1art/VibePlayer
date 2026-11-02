@@ -8,14 +8,14 @@ use std::path::{Path, PathBuf};
 
 use cut::{CutPlan, StreamIndex, Ticks, Timebase, TrimRequest};
 use export::{AudioChanges, ExportJob, ExportRequest, ExportResult};
-use library::CutSession;
+use library::{CutSession, EditorPreferences};
 use media::{Decibels, Equalizer, MediaInfo, StreamKind};
 
 use crate::os::PendingDialog;
 
 pub use panel::{EditorAction, HEIGHT, show as show_panel};
 
-use keyframes::KeyframeFinder;
+use keyframes::{KeyframeFinder, KeyframeIndex};
 
 /// Editor state for the open file. Positions are microseconds from the start of the file,
 /// like the player's; cut points are converted to the primary stream's ticks for export.
@@ -30,6 +30,11 @@ pub struct Editor {
     pub gain: Decibels,
     pub equalizer: Equalizer,
     keyframes: KeyframeFinder,
+    index: KeyframeIndex,
+    pub snap_to_keyframes: bool,
+    pub smart_cut: bool,
+    /// Why smart cut can't be used for this file, if it can't.
+    pub smart_cut_unavailable: Option<String>,
     export: Option<ExportJob>,
     pub result: Option<Result<ExportResult, String>>,
     save_dialog: Option<PendingDialog>,
@@ -37,7 +42,11 @@ pub struct Editor {
 
 impl Editor {
     /// `None` for files without a video or audio stream to cut on.
-    pub fn new(info: &MediaInfo, session: Option<&CutSession>) -> Option<Editor> {
+    pub fn new(
+        info: &MediaInfo,
+        session: Option<&CutSession>,
+        preferences: &EditorPreferences,
+    ) -> Option<Editor> {
         let primary = info
             .video()
             .map(|(stream, _)| stream)
@@ -55,6 +64,10 @@ impl Editor {
             gain: Decibels(0),
             equalizer: Equalizer::default(),
             keyframes: KeyframeFinder::new(info.path.clone(), primary.index),
+            index: KeyframeIndex::new(info.path.clone(), primary.index),
+            snap_to_keyframes: preferences.snap_to_keyframes,
+            smart_cut: preferences.smart_cut,
+            smart_cut_unavailable: export::smart_cut_support(info, primary.index).err(),
             export: None,
             result: None,
             save_dialog: None,
@@ -85,16 +98,67 @@ impl Editor {
         (position + self.origin).rescale(Timebase::MICROS, self.timebase)
     }
 
+    /// A stream timestamp as player microseconds.
+    pub fn stream_to_position(&self, ticks: Ticks) -> Ticks {
+        self.to_position(ticks)
+    }
+
     fn to_position(&self, ticks: Ticks) -> Ticks {
         ticks.rescale(self.timebase, Timebase::MICROS) - self.origin
     }
 
+    pub fn preferences(&self) -> EditorPreferences {
+        EditorPreferences {
+            snap_to_keyframes: self.snap_to_keyframes,
+            smart_cut: self.smart_cut,
+        }
+    }
+
+    /// Whether the export will re-encode the head of the cut.
+    pub fn uses_smart_cut(&self) -> bool {
+        self.smart_cut && self.smart_cut_unavailable.is_none()
+    }
+
+    /// Keyframe positions found so far, in player microseconds.
+    pub fn keyframe_positions(&self) -> impl Iterator<Item = Ticks> + '_ {
+        self.index.keyframes().iter().map(|&k| self.to_position(k))
+    }
+
+    pub fn keyframes_complete(&self) -> bool {
+        self.index.is_complete()
+    }
+
+    /// Moves the start, snapping to the nearest keyframe when snapping is on.
     pub fn set_start(&mut self, position: Ticks) {
+        let position = if self.snap_to_keyframes {
+            keyframes::nearest(self.index.keyframes(), self.to_stream(position))
+                .map_or(position, |k| self.to_position(k))
+        } else {
+            position
+        };
         self.start = position.clamp(Ticks::ZERO, self.duration);
         if self.end <= self.start {
             self.end = self.duration;
         }
         self.result = None;
+    }
+
+    /// Moves the start to the previous or next keyframe. Returns the new start if it moved.
+    pub fn step_start_to_keyframe(&mut self, forward: bool) -> Option<Ticks> {
+        let current = self.to_stream(self.start);
+        let keyframes = self.index.keyframes();
+        let target = if forward {
+            keyframes::next(keyframes, current)
+        } else {
+            keyframes::previous(keyframes, current)
+        }?;
+        let position = self.to_position(target).clamp(Ticks::ZERO, self.duration);
+        if position >= self.end {
+            return None;
+        }
+        self.start = position;
+        self.result = None;
+        Some(position)
     }
 
     pub fn set_end(&mut self, position: Ticks) {
@@ -124,8 +188,12 @@ impl Editor {
     /// The plan once the start's keyframe is known; `None` while looking it up.
     pub fn plan(&mut self) -> Option<Result<CutPlan, cut::CutError>> {
         let request = self.request();
-        let keyframe = self.keyframes.lookup(request.start)?;
-        Some(request.plan(keyframe))
+        let span = self.keyframes.lookup(request.start)?;
+        Some(if self.uses_smart_cut() {
+            request.plan_smart(span.before, span.after, span.frames_until_after)
+        } else {
+            request.plan(span.before)
+        })
     }
 
     /// Where the cut will really start, in player microseconds.
@@ -195,7 +263,7 @@ impl Editor {
 
     /// Advances the save dialog and the running export. Returns whether anything changed.
     pub fn poll(&mut self) -> bool {
-        let mut changed = false;
+        let mut changed = self.index.poll();
         if let Some(dialog) = &self.save_dialog
             && let Some(choice) = dialog.poll()
         {

@@ -20,7 +20,7 @@ impl VibePlayerApp {
             return;
         };
         let saved = self.history.cut_session(&opened.info.path);
-        match Editor::new(&opened.info, saved) {
+        match Editor::new(&opened.info, saved, &self.settings.editor) {
             Some(editor) => {
                 session
                     .player
@@ -76,6 +76,22 @@ impl VibePlayerApp {
             EditorAction::Export => {
                 if let Some(editor) = &mut self.editor {
                     editor.begin_export();
+                }
+            }
+            EditorAction::PreferencesChanged => {
+                if let Some(editor) = &self.editor {
+                    self.settings.editor = editor.preferences();
+                    self.save_settings();
+                }
+            }
+            EditorAction::StartToKeyframe { forward } => {
+                let moved = self
+                    .editor
+                    .as_mut()
+                    .and_then(|e| e.step_start_to_keyframe(forward));
+                match (moved, &mut self.session) {
+                    (Some(start), Some(session)) => session.player.seek(start, SeekMode::Exact),
+                    _ => self.osd.show("No keyframe that way"),
                 }
             }
             EditorAction::Cancel => {

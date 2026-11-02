@@ -9,9 +9,9 @@ use super::Editor;
 use super::timeline::Timeline;
 use crate::icons::Icon;
 use crate::theme;
-use crate::widgets::icon_button;
+use crate::widgets::{self, Kind, badge, balance_slider, button, chip, icon_button, section_title};
 
-pub const HEIGHT: f32 = 268.0;
+pub const HEIGHT: f32 = 300.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EditorAction {
@@ -22,8 +22,10 @@ pub enum EditorAction {
     StepForward,
     SetStartHere,
     SetEndHere,
+    StartToKeyframe { forward: bool },
     PreviewSelection,
     AudioChanged,
+    PreferencesChanged,
     Export,
     Cancel,
     Open(PathBuf),
@@ -32,6 +34,16 @@ pub enum EditorAction {
 
 fn clock(ticks: Ticks) -> String {
     ClockTime::new(ticks, Timebase::MICROS, ClockPrecision::Millis).to_string()
+}
+
+fn seconds(ticks: Ticks) -> f64 {
+    ticks.display_seconds(Timebase::MICROS)
+}
+
+/// What the plan means for the user, in one line and a color.
+struct Status {
+    text: String,
+    color: egui::Color32,
 }
 
 pub fn show(
@@ -45,11 +57,13 @@ pub fn show(
     ui.painter().rect_filled(rect, 0.0, theme::PANEL);
     ui.painter().line_segment(
         [rect.left_top(), rect.right_top()],
-        egui::Stroke::new(1.0, egui::Color32::from_rgb(44, 44, 52)),
+        egui::Stroke::new(1.0, theme::BORDER),
     );
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(20.0, 14.0))));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(22.0, 14.0))));
     let ui = &mut child;
+    ui.spacing_mut().item_spacing = vec2(8.0, 10.0);
     let mut actions = Vec::new();
+
     let plan = editor.plan();
     let keyframe_start = match &plan {
         Some(Ok(plan)) if plan.start_shift() > Ticks::ZERO => {
@@ -57,32 +71,54 @@ pub fn show(
         }
         _ => None,
     };
+    let reencoded_until = match &plan {
+        Some(Ok(plan)) => plan
+            .reencode
+            .map(|head| editor.stream_to_position(head.until)),
+        _ => None,
+    };
+    let length = match &plan {
+        Some(Ok(plan)) => plan.duration().rescale(plan.timebase, Timebase::MICROS),
+        _ => editor.end - editor.start,
+    };
 
+    // Header.
     ui.horizontal(|ui| {
         ui.label(RichText::new("Trim").size(17.0).strong());
-        ui.label(
-            RichText::new("Lossless: video is copied, never re-encoded")
-                .color(theme::TEXT_DIM)
-                .small(),
-        );
+        if reencoded_until.is_some() {
+            badge(ui, "Smart cut", theme::SMART);
+        } else {
+            badge(ui, "Lossless", theme::SUCCESS);
+        }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if icon_button(ui, Icon::Close, 30.0, "Back to player (E)").clicked() {
+            if icon_button(ui, Icon::Close, 30.0, "Back to the player (E)").clicked() {
                 actions.push(EditorAction::Close);
+            }
+            if !editor.keyframes_complete() {
+                ui.label(
+                    RichText::new("Finding keyframes…")
+                        .size(12.0)
+                        .color(theme::TEXT_DIM),
+                );
             }
         });
     });
 
+    // Timeline.
+    let keyframes: Vec<Ticks> = editor.keyframe_positions().collect();
     let input = Timeline {
         duration: editor.duration(),
         position,
         start: editor.start,
         end: editor.end,
         keyframe_start,
+        reencoded_until,
+        keyframes: &keyframes,
     }
     .show(ui);
     if let Some(start) = input.start {
         editor.set_start(start);
-        actions.push(EditorAction::Seek(start, SeekMode::Keyframe));
+        actions.push(EditorAction::Seek(editor.start, SeekMode::Keyframe));
     }
     if let Some(end) = input.end {
         editor.set_end(end);
@@ -95,6 +131,7 @@ pub fn show(
         actions.push(EditorAction::Seek(at, SeekMode::Exact));
     }
 
+    // Transport and trim points.
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         let play = if playing { Icon::Pause } else { Icon::Play };
@@ -107,118 +144,207 @@ pub fn show(
         if icon_button(ui, Icon::StepForward, 30.0, "Next frame (.)").clicked() {
             actions.push(EditorAction::StepForward);
         }
-        ui.label(RichText::new(clock(position)).monospace());
-        ui.add_space(12.0);
-        if ui.button("Set start  [I]").clicked() {
+        chip(ui, &clock(position));
+        ui.add_space(18.0);
+        ui.spacing_mut().item_spacing.x = 6.0;
+        trim_point(ui, "Start", &clock(editor.start));
+        if icon_button(ui, Icon::SkipBack, 28.0, "Start at the previous keyframe").clicked() {
+            actions.push(EditorAction::StartToKeyframe { forward: false });
+        }
+        if icon_button(ui, Icon::SkipForward, 28.0, "Start at the next keyframe").clicked() {
+            actions.push(EditorAction::StartToKeyframe { forward: true });
+        }
+        if button(ui, Kind::Secondary, None, "Set start  I").clicked() {
             actions.push(EditorAction::SetStartHere);
         }
-        if ui.button("Set end  [O]").clicked() {
+        ui.add_space(12.0);
+        trim_point(ui, "End", &clock(editor.end));
+        if button(ui, Kind::Secondary, None, "Set end  O").clicked() {
             actions.push(EditorAction::SetEndHere);
         }
-        if ui
-            .button("Preview")
-            .on_hover_text("Play from the cut's start")
-            .clicked()
-        {
-            actions.push(EditorAction::PreviewSelection);
-        }
         ui.add_space(12.0);
-        let length = match &plan {
-            Some(Ok(plan)) => plan.duration().rescale(plan.timebase, Timebase::MICROS),
-            _ => editor.end - editor.start,
-        };
-        ui.label(
-            RichText::new(format!(
-                "{}  →  {}   ({})",
-                clock(editor.start),
-                clock(editor.end),
-                clock(length)
-            ))
-            .monospace(),
-        );
-    });
-
-    match &plan {
-        Some(Ok(plan)) if plan.start_shift() > Ticks::ZERO => {
-            let shift = plan.start_shift().rescale(plan.timebase, Timebase::MICROS);
-            ui.label(
-                RichText::new(format!(
-                    "Starts at the keyframe at {} — {:.3} s before your start, so it can be copied without re-encoding.",
-                    clock(editor.plan_start_position(plan)),
-                    shift.display_seconds(Timebase::MICROS)
-                ))
-                .color(theme::KEYFRAME),
-            );
-        }
-        Some(Ok(_)) => {
-            ui.label(RichText::new("Starts exactly on a keyframe.").color(theme::TEXT_DIM));
-        }
-        Some(Err(error)) => {
-            ui.label(RichText::new(error.to_string()).color(theme::DANGER));
-        }
-        None => {
-            ui.label(RichText::new("Finding the nearest keyframe…").color(theme::TEXT_DIM));
-        }
-    }
-
-    ui.horizontal(|ui| {
-        let mut changed = false;
-        changed |= db_slider(ui, "Volume", &mut editor.gain, 200);
-        ui.add_space(10.0);
-        changed |= db_slider(ui, "Bass", &mut editor.equalizer.bass, 120);
-        changed |= db_slider(ui, "Mid", &mut editor.equalizer.mid, 120);
-        changed |= db_slider(ui, "Treble", &mut editor.equalizer.treble, 120);
-        if !editor.audio_changes().is_none() && ui.small_button("Reset audio").clicked() {
-            editor.gain = Decibels(0);
-            editor.equalizer = media::Equalizer::default();
-            changed = true;
-        }
-        if changed {
-            editor.result = None;
-            actions.push(EditorAction::AudioChanged);
-        }
-    });
-
-    ui.horizontal(|ui| {
-        let note = if editor.audio_changes().is_none() {
-            "Nothing will be re-encoded."
-        } else {
-            "Video is copied; audio is re-encoded to apply volume and EQ."
-        };
-        ui.label(RichText::new(note).color(theme::TEXT_DIM));
+        trim_point(ui, "Length", &clock(length));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if editor.is_exporting() {
-                if ui.button("Cancel").clicked() {
-                    actions.push(EditorAction::Cancel);
-                }
-                ui.add(
-                    egui::ProgressBar::new(editor.export_fraction())
-                        .desired_width(220.0)
-                        .show_percentage(),
-                );
-                ui.ctx().request_repaint();
-            } else {
-                let ready = matches!(plan, Some(Ok(_)));
-                let export = egui::Button::new(RichText::new("Export").strong())
-                    .fill(theme::ACCENT)
-                    .min_size(vec2(110.0, 32.0));
-                if ui.add_enabled(ready, export).clicked() {
-                    actions.push(EditorAction::Export);
-                }
-                show_result(ui, editor, &mut actions);
+            if button(ui, Kind::Ghost, Some(Icon::Play), "Preview")
+                .on_hover_text("Play the trimmed clip")
+                .clicked()
+            {
+                actions.push(EditorAction::PreviewSelection);
             }
+        });
+    });
+
+    let status = status(editor, plan.as_ref(), reencoded_until);
+    ui.horizontal(|ui| {
+        let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), egui::Sense::hover());
+        ui.painter().circle_filled(dot.center(), 4.0, status.color);
+        ui.label(RichText::new(status.text).color(theme::TEXT));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            show_result(ui, editor, &mut actions);
+        });
+    });
+
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 28.0;
+        ui.vertical(|ui| {
+            section_title(ui, "Cut");
+            if widgets::toggle(ui, &mut editor.snap_to_keyframes, "Snap start to keyframes")
+                .changed()
+            {
+                actions.push(EditorAction::PreferencesChanged);
+            }
+            let available = editor.smart_cut_unavailable.is_none();
+            let response = widgets::toggle_enabled(
+                ui,
+                &mut editor.smart_cut,
+                "Frame-accurate start (smart cut)",
+                available,
+            );
+            let response = match &editor.smart_cut_unavailable {
+                Some(reason) => response
+                    .on_disabled_hover_text(reason.clone())
+                    .on_hover_text(reason.clone()),
+                None => response.on_hover_text(
+                    "Re-encodes only the frames up to the next keyframe; the rest is still copied",
+                ),
+            };
+            if response.changed() {
+                editor.result = None;
+                actions.push(EditorAction::PreferencesChanged);
+            }
+        });
+        ui.vertical(|ui| {
+            section_title(ui, "Audio");
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 18.0;
+                let mut changed = false;
+                for (label, gain, limit) in [
+                    ("Volume", &mut editor.gain, 20.0),
+                    ("Bass", &mut editor.equalizer.bass, 12.0),
+                    ("Mid", &mut editor.equalizer.mid, 12.0),
+                    ("Treble", &mut editor.equalizer.treble, 12.0),
+                ] {
+                    ui.allocate_ui(vec2(140.0, 44.0), |ui| {
+                        let value = f32::from(gain.0) / 10.0;
+                        if let Some(new) =
+                            balance_slider(ui, label, value, limit, |v| format!("{v:+.1} dB"))
+                        {
+                            let tenths = ((new * 2.0).round() * 5.0) as i16;
+                            if tenths != gain.0 {
+                                *gain = Decibels(tenths);
+                                changed = true;
+                            }
+                        }
+                    });
+                }
+                if changed {
+                    editor.result = None;
+                    actions.push(EditorAction::AudioChanged);
+                }
+            });
+        });
+        ui.with_layout(Layout::right_to_left(Align::Max), |ui| {
+            export_area(
+                ui,
+                editor,
+                plan.as_ref().is_some_and(Result::is_ok),
+                &mut actions,
+            );
         });
     });
     actions
 }
 
+fn trim_point(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.label(RichText::new(label).size(12.5).color(theme::TEXT_DIM));
+    chip(ui, value);
+}
+
+fn status(
+    editor: &Editor,
+    plan: Option<&Result<cut::CutPlan, cut::CutError>>,
+    reencoded_until: Option<Ticks>,
+) -> Status {
+    let audio = if editor.audio_changes().is_none() {
+        ""
+    } else {
+        " Audio is re-encoded for the volume and EQ changes."
+    };
+    match plan {
+        None => Status {
+            text: "Finding the keyframes around the start…".into(),
+            color: theme::TEXT_DIM,
+        },
+        Some(Err(error)) => Status {
+            text: format!("Can't cut here: {error}."),
+            color: theme::DANGER,
+        },
+        Some(Ok(plan)) => match (plan.reencode, reencoded_until) {
+            (Some(head), Some(until)) => {
+                let span = seconds(until - editor.start);
+                let text = if until >= editor.end {
+                    format!(
+                        "Frame-accurate. The whole clip is re-encoded ({} frames, {span:.2} s) because it ends before the next keyframe.{audio}",
+                        head.frames
+                    )
+                } else {
+                    format!(
+                        "Frame-accurate. Re-encodes {} frames ({span:.2} s) up to the keyframe at {}; the rest is copied.{audio}",
+                        head.frames,
+                        clock(until)
+                    )
+                };
+                Status {
+                    text,
+                    color: theme::SMART,
+                }
+            }
+            _ if plan.start_shift() > Ticks::ZERO => {
+                let shift = plan.start_shift().rescale(plan.timebase, Timebase::MICROS);
+                Status {
+                    text: format!(
+                        "Starts at the keyframe at {}, {:.3} s before your start, so nothing is re-encoded.{audio}",
+                        clock(editor.plan_start_position(plan)),
+                        seconds(shift)
+                    ),
+                    color: theme::KEYFRAME,
+                }
+            }
+            _ => Status {
+                text: format!("Starts exactly on a keyframe. Video is copied untouched.{audio}"),
+                color: theme::SUCCESS,
+            },
+        },
+    }
+}
+
+fn export_area(ui: &mut egui::Ui, editor: &Editor, ready: bool, actions: &mut Vec<EditorAction>) {
+    if editor.is_exporting() {
+        if button(ui, Kind::Secondary, None, "Cancel").clicked() {
+            actions.push(EditorAction::Cancel);
+        }
+        ui.add(
+            egui::ProgressBar::new(editor.export_fraction())
+                .desired_width(200.0)
+                .desired_height(8.0)
+                .corner_radius(4.0),
+        );
+        ui.ctx().request_repaint();
+        return;
+    }
+    if widgets::button_enabled(ui, Kind::Primary, Some(Icon::Scissors), "Export", ready).clicked() {
+        actions.push(EditorAction::Export);
+    }
+}
+
+/// The outcome of the last export, laid out right to left.
 fn show_result(ui: &mut egui::Ui, editor: &Editor, actions: &mut Vec<EditorAction>) {
     match &editor.result {
         Some(Ok(result)) => {
-            if ui.button("Show in folder").clicked() {
+            if button(ui, Kind::Ghost, Some(Icon::Folder), "Show").clicked() {
                 actions.push(EditorAction::ShowInFolder(result.output.clone()));
             }
-            if ui.button("Open").clicked() {
+            if button(ui, Kind::Ghost, Some(Icon::Play), "Open").clicked() {
                 actions.push(EditorAction::Open(result.output.clone()));
             }
             let name = result
@@ -226,7 +352,7 @@ fn show_result(ui: &mut egui::Ui, editor: &Editor, actions: &mut Vec<EditorActio
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            ui.label(RichText::new(format!("Saved {name}")).color(theme::ACCENT_SOFT))
+            ui.label(RichText::new(format!("Saved {name}")).color(theme::SUCCESS))
                 .on_hover_text(result.output.display().to_string());
         }
         Some(Err(error)) => {
@@ -234,35 +360,4 @@ fn show_result(ui: &mut egui::Ui, editor: &Editor, actions: &mut Vec<EditorActio
         }
         None => {}
     }
-}
-
-/// A slider for a gain in tenths of a decibel within ±`limit` tenths. Returns whether it moved.
-fn db_slider(ui: &mut egui::Ui, label: &str, gain: &mut Decibels, limit: i16) -> bool {
-    ui.label(RichText::new(label).color(theme::TEXT_DIM));
-    let mut db = f32::from(gain.0) / 10.0;
-    let max = f32::from(limit) / 10.0;
-    ui.spacing_mut().slider_width = 96.0;
-    let response = ui
-        .add(
-            egui::Slider::new(&mut db, -max..=max)
-                .step_by(0.5)
-                .show_value(false),
-        )
-        .on_hover_text("Double-click to reset");
-    ui.label(
-        RichText::new(format!("{:+.1} dB", f32::from(gain.0) / 10.0))
-            .monospace()
-            .small(),
-    );
-    ui.add_space(8.0);
-    let tenths = (db * 10.0).round() as i16;
-    if response.changed() && tenths != gain.0 {
-        gain.0 = tenths;
-        return true;
-    }
-    if response.double_clicked() && gain.0 != 0 {
-        gain.0 = 0;
-        return true;
-    }
-    false
 }

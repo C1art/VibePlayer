@@ -7,8 +7,12 @@ pub const PANEL: Color32 = Color32::from_rgb(24, 24, 28);
 pub const PANEL_RAISED: Color32 = Color32::from_rgb(34, 34, 40);
 pub const TEXT: Color32 = Color32::from_rgb(236, 236, 240);
 pub const TEXT_DIM: Color32 = Color32::from_rgb(160, 160, 172);
+pub const HOVER: Color32 = Color32::from_rgb(48, 48, 58);
+pub const BORDER: Color32 = Color32::from_rgb(52, 52, 62);
 pub const TRACK: Color32 = Color32::from_rgba_premultiplied(70, 70, 80, 200);
 pub const DANGER: Color32 = Color32::from_rgb(255, 99, 99);
+pub const SMART: Color32 = Color32::from_rgb(77, 182, 255);
+pub const SUCCESS: Color32 = Color32::from_rgb(88, 214, 141);
 pub const KEYFRAME: Color32 = Color32::from_rgb(255, 196, 61);
 
 pub fn apply(ctx: &egui::Context) {
@@ -19,7 +23,7 @@ pub fn apply(ctx: &egui::Context) {
     visuals.faint_bg_color = PANEL_RAISED;
     visuals.window_corner_radius = CornerRadius::same(12);
     visuals.menu_corner_radius = CornerRadius::same(10);
-    visuals.window_stroke = Stroke::new(1.0, Color32::from_rgb(48, 48, 56));
+    visuals.window_stroke = Stroke::new(1.0, BORDER);
     visuals.selection.bg_fill = ACCENT;
     visuals.selection.stroke = Stroke::new(1.0, TEXT);
     visuals.hyperlink_color = ACCENT_SOFT;
@@ -38,6 +42,8 @@ pub fn apply(ctx: &egui::Context) {
     visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(48, 48, 58);
     visuals.widgets.hovered.bg_fill = Color32::from_rgb(48, 48, 58);
     visuals.widgets.active.weak_bg_fill = ACCENT;
+    // Window title bars use this fill; matching the panel makes each window one card.
+    visuals.widgets.open.weak_bg_fill = PANEL;
     visuals.widgets.active.bg_fill = ACCENT;
     ctx.set_visuals(visuals);
 

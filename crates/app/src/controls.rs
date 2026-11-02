@@ -166,7 +166,7 @@ fn tracks_menu(ui: &mut egui::Ui, state: &ControlsState<'_>, actions: &mut Vec<A
     egui::Popup::menu(&response).show(|ui| {
         ui.set_min_width(220.0);
         if !audio.is_empty() {
-            ui.label(egui::RichText::new("Audio").color(theme::TEXT_DIM).small());
+            crate::widgets::section_title(ui, "Audio");
             for stream in &audio {
                 let selected = state.audio_stream == Some(stream.index);
                 if ui.selectable_label(selected, track_label(stream)).clicked() {
@@ -176,11 +176,7 @@ fn tracks_menu(ui: &mut egui::Ui, state: &ControlsState<'_>, actions: &mut Vec<A
         }
         if !subtitles.is_empty() {
             ui.separator();
-            ui.label(
-                egui::RichText::new("Subtitles")
-                    .color(theme::TEXT_DIM)
-                    .small(),
-            );
+            crate::widgets::section_title(ui, "Subtitles");
             if ui
                 .selectable_label(state.subtitle_stream.is_none(), "Off")
                 .clicked()

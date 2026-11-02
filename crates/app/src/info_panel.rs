@@ -12,9 +12,8 @@ pub struct PlaybackStats {
 }
 
 pub fn show(ctx: &egui::Context, open: &mut bool, info: &MediaInfo, stats: &PlaybackStats) {
-    egui::Window::new("File info")
+    crate::widgets::window("File info")
         .open(open)
-        .collapsible(false)
         .resizable(true)
         .default_width(380.0)
         .default_height(ctx.content_rect().height() * 0.7)
@@ -164,7 +163,7 @@ impl Rows<'_> {
 
 fn section(ui: &mut egui::Ui, title: &str, add_rows: impl FnOnce(&mut Rows<'_>)) {
     ui.add_space(4.0);
-    ui.label(RichText::new(title).strong().color(theme::ACCENT_SOFT));
+    crate::widgets::section_title(ui, title);
     egui::Grid::new(title)
         .num_columns(2)
         .spacing([16.0, 4.0])
