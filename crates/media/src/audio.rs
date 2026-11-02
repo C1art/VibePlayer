@@ -174,6 +174,22 @@ struct ActiveFilter {
     graph: FilterGraph,
     key: (u32, i32, String),
     output_timebase: Timebase,
+    /// Media time of the first frame pushed in, in microseconds. `atempo` stamps its output
+    /// from here at wall-clock pace, so this is needed to get back to media time.
+    origin: Option<Ticks>,
+    speed: Speed,
+}
+
+impl ActiveFilter {
+    /// Converts an output timestamp back to media time, undoing `atempo`'s stretch.
+    fn media_time(&self, output: Ticks) -> Ticks {
+        match self.origin {
+            Some(origin) if self.speed != Speed::NORMAL => {
+                origin + self.speed.wall_to_media(output - origin)
+            }
+            _ => output,
+        }
+    }
 }
 
 /// Decodes one audio stream and converts it to an [`AudioTarget`] with [`AudioEffects`].
@@ -242,9 +258,9 @@ impl AudioDecoder {
                 && filter.graph.pull(&mut self.filtered)? == Received::Output
             {
                 let frame = mem::replace(&mut self.filtered, Frame::new()?);
-                let pts = frame
-                    .pts()
-                    .map(|pts| pts.rescale(filter.output_timebase, Timebase::MICROS));
+                let pts = frame.filtered_pts().map(|pts| {
+                    filter.media_time(pts.rescale(filter.output_timebase, Timebase::MICROS))
+                });
                 return Ok(Some(AudioFrame { frame, pts }));
             }
             match self.codec.receive_frame(&mut self.decoded) {
@@ -284,8 +300,17 @@ impl AudioDecoder {
         if self.filter.as_ref().is_none_or(|f| f.key != key) {
             self.filter = Some(self.build_filter(key)?);
         }
+        let timebase = self.params.timebase();
         match &mut self.filter {
-            Some(filter) => filter.graph.push(Some(&self.decoded)),
+            Some(filter) => {
+                if filter.origin.is_none() {
+                    filter.origin = self
+                        .decoded
+                        .pts()
+                        .map(|pts| pts.rescale(timebase, Timebase::MICROS));
+                }
+                filter.graph.push(Some(&self.decoded))
+            }
             None => Ok(()),
         }
     }
@@ -326,6 +351,8 @@ impl AudioDecoder {
             output_timebase: graph.sink_timebase().unwrap_or(timebase),
             graph,
             key,
+            origin: None,
+            speed: self.effects.speed,
         })
     }
 }

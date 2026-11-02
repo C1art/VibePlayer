@@ -250,3 +250,50 @@ fn a_full_scan_finds_every_keyframe() {
         .collect();
     assert_eq!(seconds, [0.0, 1.0, 2.0, 3.0]);
 }
+
+/// First and last audio timestamps (seconds) after converting to `rate` at `speed`.
+fn audio_time_span(rate: u32, speed: u16) -> (f64, f64) {
+    let mut demuxer = Demuxer::open(&fixture("h264_bframes.mp4")).unwrap();
+    let stream = demuxer.best_stream(StreamKind::Audio).unwrap();
+    demuxer.select_streams(&[stream]);
+    let effects = AudioEffects {
+        speed: Speed::from_percent(speed),
+        ..AudioEffects::default()
+    };
+    let params = demuxer.stream_params(stream).unwrap();
+    let mut decoder = AudioDecoder::new(params, AudioTarget::playback(rate, 2), effects).unwrap();
+    let mut packet = Packet::new().unwrap();
+    let mut times = Vec::new();
+    loop {
+        let more = demuxer.read(&mut packet).unwrap();
+        decoder.send(more.then_some(&packet)).unwrap();
+        while let Some(frame) = decoder.receive().unwrap() {
+            times.push(frame.pts.unwrap().display_seconds(Timebase::MICROS));
+        }
+        if !more {
+            return (times[0], *times.last().unwrap());
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn audio_timestamps_stay_in_media_time_when_resampled_or_stretched() {
+    for (rate, speed) in [
+        (48_000, 100),
+        (8_000, 100),
+        (44_100, 100),
+        (44_100, 200),
+        (48_000, 50),
+    ] {
+        let (first, last) = audio_time_span(rate, speed);
+        assert!(
+            first.abs() < 0.05,
+            "{rate} Hz at {speed}%: starts at {first}"
+        );
+        assert!(
+            (3.85..4.05).contains(&last),
+            "{rate} Hz at {speed}%: ends at {last}"
+        );
+    }
+}

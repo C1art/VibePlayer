@@ -286,7 +286,7 @@ impl VideoDecoder {
         let format = pixel_format_name(frame.format()).unwrap_or_default();
         let layout = PlaneLayout::from_format_name(&format)
             .ok_or_else(|| MediaError::Unsupported(format!("filtered pixel format {format}")))?;
-        let pts = frame.pts().unwrap_or(Ticks::ZERO);
+        let pts = frame.filtered_pts().unwrap_or(Ticks::ZERO);
         let color = merge_color(frame.color(), self.stream_color).resolved(frame.height());
         Ok(VideoFrame {
             pts: pts.rescale(timebase, Timebase::MICROS),
