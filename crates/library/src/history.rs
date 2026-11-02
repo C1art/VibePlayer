@@ -64,7 +64,6 @@ impl Default for History {
 }
 
 impl History {
-
     pub fn add_recent(&mut self, path: &Path, now: u64) {
         self.recents.retain(|recent| recent.path != path);
         self.recents.insert(

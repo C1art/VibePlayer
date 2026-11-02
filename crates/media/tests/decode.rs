@@ -201,3 +201,18 @@ fn truncated_files_fail_or_decode_partially_without_panicking() {
         while let Ok(true) = demuxer.read(&mut packet) {}
     }
 }
+
+#[test]
+#[ignore]
+fn keyframe_lookup_finds_the_gop_start_before_a_target() {
+    let mut demuxer = Demuxer::open(&fixture("h264_bframes.mp4")).unwrap();
+    let stream = demuxer.best_stream(StreamKind::Video).unwrap();
+    let timebase = demuxer.timebase(stream).unwrap();
+    let at = |seconds: f64| Ticks::from_display_seconds(seconds, timebase);
+    let keyframe = demuxer.keyframe_at_or_before(stream, at(2.7)).unwrap();
+    assert_eq!(keyframe, Some(at(2.0)));
+    assert_eq!(
+        demuxer.keyframe_at_or_before(stream, at(1.0)).unwrap(),
+        Some(at(1.0))
+    );
+}

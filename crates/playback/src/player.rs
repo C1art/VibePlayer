@@ -5,7 +5,9 @@ use std::time::{Duration, Instant};
 use audio::{AudioControl, Volume};
 use crossbeam::channel::{self, Receiver, Sender};
 use cut::{StreamIndex, Ticks};
-use media::{AudioEffects, Equalizer, Speed, Subtitle, SubtitleContent, VideoFrame, VideoOptions};
+use media::{
+    AudioEffects, Decibels, Equalizer, Speed, Subtitle, SubtitleContent, VideoFrame, VideoOptions,
+};
 
 use crate::messages::{Command, DecodedVideo, Event, Opened, Shared};
 use crate::reader::{self, ReaderSetup};
@@ -447,8 +449,9 @@ impl Player {
         self.shared.audio_effects.store(self.effects);
     }
 
-    /// Live EQ for the editor preview.
-    pub fn set_equalizer(&mut self, equalizer: Equalizer) {
+    /// Live EQ and gain for the editor preview.
+    pub fn set_audio_edits(&mut self, gain: Decibels, equalizer: Equalizer) {
+        self.effects.gain = gain;
         self.effects.equalizer = equalizer;
         self.shared.audio_effects.store(self.effects);
     }

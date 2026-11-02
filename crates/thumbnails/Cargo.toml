@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 crossbeam.workspace = true
+cut.workspace = true
 media.workspace = true
 
 [lints]

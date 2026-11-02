@@ -185,11 +185,11 @@ impl OutputContext {
         Ok(())
     }
 
-    /// Writes the header. Timestamps are shifted so the earliest one is zero.
+    /// Writes the header. Negative decode timestamps (B-frames before the first shown frame)
+    /// are left to the muxer, which keeps presentation starting at zero where it can.
     pub fn write_header(&mut self) -> Result<(), MediaError> {
         // SAFETY: the context is valid; streams are set up; options are null.
         unsafe {
-            (*self.ptr.as_ptr()).avoid_negative_ts = sys::AVFMT_AVOID_NEG_TS_MAKE_ZERO;
             check(
                 sys::avformat_write_header(self.ptr.as_ptr(), ptr::null_mut()),
                 "avformat_write_header",

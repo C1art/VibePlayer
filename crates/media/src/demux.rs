@@ -90,3 +90,56 @@ impl Demuxer {
         StreamParams::copy_from(&stream)
     }
 }
+
+/// How many packets a keyframe lookup may read before giving up.
+const KEYFRAME_SCAN_LIMIT: usize = 5_000;
+/// How far back a lookup retries when the first seek lands after the target.
+const KEYFRAME_RETRY_BACK: Ticks = Ticks(10_000_000);
+
+impl Demuxer {
+    /// The timestamp of the last keyframe of `stream` at or before `target`, both in the
+    /// stream's timebase. Changes the stream selection and read position.
+    pub fn keyframe_at_or_before(
+        &mut self,
+        stream: StreamIndex,
+        target: Ticks,
+    ) -> Result<Option<Ticks>, MediaError> {
+        let timebase = self
+            .timebase(stream)
+            .ok_or(MediaError::NoSuchStream(stream))?;
+        self.select_streams(&[stream]);
+        if let Some(found) = self.scan_keyframes(stream, target, target)? {
+            return Ok(Some(found));
+        }
+        let back = KEYFRAME_RETRY_BACK.rescale(Timebase::MICROS, timebase);
+        let earlier = (target - back).max(Ticks::ZERO);
+        self.scan_keyframes(stream, earlier, target)
+    }
+
+    fn scan_keyframes(
+        &mut self,
+        stream: StreamIndex,
+        seek_to: Ticks,
+        target: Ticks,
+    ) -> Result<Option<Ticks>, MediaError> {
+        self.seek_stream(stream, seek_to)?;
+        let mut packet = Packet::new()?;
+        let mut best = None;
+        for _ in 0..KEYFRAME_SCAN_LIMIT {
+            if !self.read(&mut packet)? {
+                break;
+            }
+            let Some(pts) = packet.pts() else {
+                continue;
+            };
+            if packet.is_keyframe() && pts <= target {
+                best = best.max(Some(pts));
+            }
+            let decoded_after = packet.dts().unwrap_or(pts) > target;
+            if decoded_after && pts > target {
+                break;
+            }
+        }
+        Ok(best)
+    }
+}
