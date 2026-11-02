@@ -1465,6 +1465,7 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 name = "library"
 version = "0.1.0"
 dependencies = [
+ "crossbeam",
  "cut",
  "serde",
  "serde_json",
@@ -2395,8 +2396,8 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "render"
 version = "0.1.0"
 dependencies = [
+ "media",
  "wgpu",
- "windows",
 ]
 
 [[package]]
