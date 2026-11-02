@@ -19,6 +19,7 @@ BEGIN
             VALUE "FileDescription", "VibePlayer"
             VALUE "FileVersion", "@VERSION@"
             VALUE "InternalName", "vibeplayer"
+            VALUE "LegalCopyright", "Licensed under the GNU GPL v3"
             VALUE "OriginalFilename", "vibeplayer.exe"
             VALUE "ProductName", "VibePlayer"
             VALUE "ProductVersion", "@VERSION@"

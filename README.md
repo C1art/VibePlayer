@@ -62,6 +62,7 @@ Tests: `cargo test --workspace`; decoding and export tests against `tests/fixtur
    builds the installer and attaches it to the GitHub release. The in-app updater looks for
    the newest non-prerelease whose asset ends in `-setup.exe`.
 
-## License notes
+## License
 
-FFmpeg is used as shared libraries under the LGPL; its license is installed next to the app.
+VibePlayer is free software under the [GNU General Public License v3.0](LICENSE).
+FFmpeg is used as shared libraries under the LGPL; both licenses are installed next to the app.

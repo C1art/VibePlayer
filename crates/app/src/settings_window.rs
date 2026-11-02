@@ -60,6 +60,7 @@ pub fn show(
                     "Releases",
                     format!("https://github.com/{}/releases", update::REPOSITORY),
                 );
+                ui.label(RichText::new("· GPL-3.0").color(theme::TEXT_DIM));
             });
         });
     changed
