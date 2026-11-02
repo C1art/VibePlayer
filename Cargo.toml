@@ -1,6 +1,44 @@
-[package]
-name = "vibeplayer"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+publish = false
 
-[dependencies]
+[workspace.dependencies]
+audio = { path = "crates/audio" }
+cut = { path = "crates/cut" }
+export = { path = "crates/export" }
+library = { path = "crates/library" }
+media = { path = "crates/media" }
+playback = { path = "crates/playback" }
+render = { path = "crates/render" }
+thumbnails = { path = "crates/thumbnails" }
+update = { path = "crates/update" }
+
+cpal = "0.18"
+crossbeam = "0.8"
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "wgpu_no_default_features"] }
+embed-resource = "3.0"
+ffmpeg-sys-next = { version = "9.0", default-features = false, features = ["avcodec", "avfilter", "avformat", "swresample", "swscale"] }
+rubato = "5.0"
+semver = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ureq = { version = "3.5", features = ["json"] }
+wgpu = { version = "30.0", default-features = false, features = ["std", "parking_lot", "wgsl", "dx12", "vulkan"] }
+windows = "0.62"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# egui and wgpu are unusably slow unoptimized; our own crates stay fast to rebuild.
+[profile.dev.package."*"]
+opt-level = 2

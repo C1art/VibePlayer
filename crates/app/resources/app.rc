@@ -1,0 +1,29 @@
+// Filled in by build.rs. Add `1 ICON "icon.ico"` here once the app has an icon.
+#include <winver.h>
+
+1 VERSIONINFO
+FILEVERSION @VERSION_NUMBERS@
+PRODUCTVERSION @VERSION_NUMBERS@
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "VibePlayer"
+            VALUE "FileVersion", "@VERSION@"
+            VALUE "InternalName", "vibeplayer"
+            VALUE "OriginalFilename", "vibeplayer.exe"
+            VALUE "ProductName", "VibePlayer"
+            VALUE "ProductVersion", "@VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

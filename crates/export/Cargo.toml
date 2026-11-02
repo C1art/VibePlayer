@@ -1,0 +1,13 @@
+[package]
+name = "export"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+crossbeam.workspace = true
+cut.workspace = true
+media.workspace = true
+
+[lints]
+workspace = true

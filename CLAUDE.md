@@ -47,13 +47,14 @@ Cargo workspace. Dependencies flow downward only; `cut` and `library` never depe
 
 ## Commands
 
-- Run: `cargo run -p app [-- <file>]`
+- Run: `cargo run -p app [-- <file>]` (the binary is `vibeplayer.exe`)
 - Release: `cargo build --release`
 - Installer: `iscc installer/vibeplayer.iss` (after a release build)
 - Format: `cargo fmt --all`
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings`
 - Test: `cargo test -p <crate>` or `cargo test --workspace`
 - Before building, set `FFMPEG_DIR` to a shared FFmpeg build, 8.1 or newer.
+- Linux also builds and tests, for development only; it needs `pkg-config` and the ALSA, X11 and FFmpeg dev packages.
 
 After every change, in order: format, lint, test the changed crate. Test the whole workspace before committing.
 
