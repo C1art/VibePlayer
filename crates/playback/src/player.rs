@@ -5,17 +5,15 @@ use std::time::{Duration, Instant};
 use audio::{AudioControl, Volume};
 use crossbeam::channel::{self, Receiver, Sender};
 use cut::{StreamIndex, Ticks};
-use media::{
-    AudioEffects, Decibels, Equalizer, Speed, Subtitle, SubtitleContent, VideoFrame, VideoOptions,
-};
+use media::{AudioEffects, Decibels, Equalizer, Speed, Subtitle, VideoFrame, VideoOptions};
 
 use crate::messages::{Command, DecodedVideo, Event, Opened, Shared};
 use crate::reader::{self, ReaderSetup};
+use crate::subtitle_list::SubtitleList;
 use crate::{AudioReading, Clock, FrameQueue, Generation, PlaybackError, Shown, Timed};
 
 /// Decoded frames the video thread may get ahead of the screen.
 const FRAMES_AHEAD: usize = 4;
-const MAX_SUBTITLES: usize = 256;
 
 impl Timed for VideoFrame {
     fn pts(&self) -> Ticks {
@@ -79,7 +77,7 @@ pub struct Player {
     volume: Volume,
     muted: bool,
     effects: AudioEffects,
-    subtitles: Vec<Subtitle>,
+    subtitles: SubtitleList,
     pending_start: Option<Ticks>,
     dropped_frames: u64,
 }
@@ -127,7 +125,7 @@ impl Player {
             volume: options.volume,
             muted: options.muted,
             effects,
-            subtitles: Vec::new(),
+            subtitles: SubtitleList::default(),
             pending_start: options.start_at.filter(|t| t.0 > 0),
             dropped_frames: 0,
         }
@@ -248,7 +246,7 @@ impl Player {
                 Event::AudioFailed(error) => self.audio_error = Some(error),
                 Event::Subtitle(generation, subtitle) => {
                     if generation == self.generation {
-                        self.add_subtitle(subtitle);
+                        self.subtitles.add(subtitle);
                     }
                 }
                 Event::VideoEnded(generation) => self.video_ended |= generation == self.generation,
@@ -327,7 +325,7 @@ impl Player {
             || (self.audio_ended && self.audio.as_ref().is_none_or(|a| a.queued_frames() == 0));
         if video_done && audio_done {
             self.ended = true;
-            self.pause_at(now);
+            self.pause();
             if let Some(duration) = self.duration() {
                 let end = self
                     .current_frame()
@@ -375,10 +373,6 @@ impl Player {
         if let Some(audio) = &self.audio {
             audio.set_paused(true);
         }
-    }
-
-    fn pause_at(&mut self, _now: Instant) {
-        self.pause();
     }
 
     pub fn toggle_play(&mut self, now: Instant) {
@@ -489,27 +483,9 @@ impl Player {
         self.seek(self.position(), SeekMode::Exact);
     }
 
-    fn add_subtitle(&mut self, subtitle: Subtitle) {
-        let at = self
-            .subtitles
-            .partition_point(|existing| existing.start <= subtitle.start);
-        self.subtitles.insert(at, subtitle);
-        if self.subtitles.len() > MAX_SUBTITLES {
-            self.subtitles.remove(0);
-        }
-    }
-
     /// The subtitle to show at the current position.
     pub fn active_subtitle(&self) -> Option<&Subtitle> {
-        let position = self.position();
-        let index = self
-            .subtitles
-            .partition_point(|subtitle| subtitle.start <= position);
-        let subtitle = self.subtitles[..index].last()?;
-        let next_start = self.subtitles.get(index).map(|next| next.start);
-        let end = subtitle.end.or(next_start);
-        let visible = end.is_none_or(|end| position < end);
-        (visible && subtitle.content != SubtitleContent::Clear).then_some(subtitle)
+        self.subtitles.active(self.position())
     }
 }
 

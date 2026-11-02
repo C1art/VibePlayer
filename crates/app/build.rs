@@ -8,9 +8,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (major, minor, patch) = (next_part(), next_part(), next_part());
 
     let template = fs::read_to_string("resources/app.rc")?;
+    let icon = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?).join("resources/icon.ico");
     let resource = template
         .replace("@VERSION_NUMBERS@", &format!("{major},{minor},{patch},0"))
-        .replace("@VERSION@", &version);
+        .replace("@VERSION@", &version)
+        .replace("@ICON@", &icon.display().to_string().replace('\\', "/"));
     let resource_path = PathBuf::from(env::var("OUT_DIR")?).join("app.rc");
     fs::write(&resource_path, resource)?;
 

@@ -33,6 +33,7 @@ pub enum Action {
     ExitFullscreen,
     ToggleInfo,
     ToggleHelp,
+    ToggleSettings,
     ToggleEditor,
     /// Set the trim start or end at the current position (editor only).
     TrimStartHere,

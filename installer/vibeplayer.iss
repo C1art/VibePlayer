@@ -4,7 +4,8 @@
 #define AppExeName "vibeplayer.exe"
 #define AppExe AddBackslash(SourcePath) + "..\target\release\" + AppExeName
 #define AppVersion GetStringFileInfo(AppExe, "ProductVersion")
-#define FFmpegBin AddBackslash(GetEnv("FFMPEG_DIR")) + "bin"
+#define FFmpegDir AddBackslash(GetEnv("FFMPEG_DIR"))
+#define FFmpegBin FFmpegDir + "bin"
 #define ProgId "VibePlayer.Video"
 
 #if AppVersion == ""
@@ -31,6 +32,7 @@ ChangesAssociations=yes
 CloseApplications=yes
 RestartApplications=yes
 UninstallDisplayIcon={app}\{#AppExeName}
+SetupIconFile=..\crates\app\resources\icon.ico
 OutputDir=..\target\installer
 OutputBaseFilename=VibePlayer-{#AppVersion}-setup
 Compression=lzma2/max
@@ -43,6 +45,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#FFmpegBin}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
+; FFmpeg is LGPL; its license ships with it.
+Source: "{#FFmpegDir}LICENSE.txt"; DestDir: "{app}\licenses"; DestName: "FFmpeg-LICENSE.txt"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"

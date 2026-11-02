@@ -11,6 +11,7 @@ mod frame_queue;
 mod messages;
 mod player;
 mod reader;
+mod subtitle_list;
 mod video_worker;
 
 pub use clock::{AudioAnchor, AudioReading, Clock, Generation};

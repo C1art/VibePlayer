@@ -1,0 +1,180 @@
+use eframe::egui::{self, RichText};
+use library::Settings;
+use update::{Download, Release, UpdateCheck, UpdateError};
+
+use crate::app::unix_now;
+use crate::theme;
+
+/// The update flow: background check, the "Update / Ask later / Skip" prompt, the download,
+/// and launching the installer.
+#[derive(Default)]
+pub struct Updates {
+    check: Option<(UpdateCheck, bool)>,
+    offer: Option<Release>,
+    download: Option<Download>,
+    /// Feedback for checks the user started from Settings.
+    pub status: Option<String>,
+}
+
+pub enum UpdateOutcome {
+    None,
+    SettingsChanged,
+    /// The installer is running; the app should close so it can replace files.
+    InstallerLaunched,
+}
+
+impl Updates {
+    /// Starts the daily automatic check if it's due.
+    pub fn start_automatic(&mut self, settings: &Settings) {
+        if settings.updates.check_automatically
+            && update::is_check_due(settings.updates.last_check, unix_now())
+        {
+            self.check = Some((UpdateCheck::start(), false));
+        }
+    }
+
+    pub fn check_now(&mut self) {
+        if self.check.is_none() {
+            self.status = Some("Checking…".into());
+            self.check = Some((UpdateCheck::start(), true));
+        }
+    }
+
+    pub fn is_busy(&self) -> bool {
+        self.check.is_some() || self.download.is_some()
+    }
+
+    pub fn poll(&mut self, settings: &mut Settings) -> UpdateOutcome {
+        let mut outcome = UpdateOutcome::None;
+        if let Some((check, manual)) = &self.check
+            && let Some(result) = check.poll()
+        {
+            let manual = *manual;
+            self.check = None;
+            settings.updates.last_check = Some(unix_now());
+            outcome = UpdateOutcome::SettingsChanged;
+            self.status = None;
+            match result {
+                Ok(release) => {
+                    let skipped = if manual {
+                        None
+                    } else {
+                        settings.updates.skipped_version.as_deref()
+                    };
+                    if update::should_offer(&update::current_version(), &release.version, skipped) {
+                        self.offer = Some(release);
+                    } else if manual {
+                        self.status = Some("You're on the latest version.".into());
+                    }
+                }
+                Err(error) if manual => self.status = Some(describe(&error)),
+                Err(_) => {}
+            }
+        }
+        if let Some(download) = &mut self.download
+            && let Some(result) = download.poll()
+        {
+            self.download = None;
+            match result.and_then(launch_installer) {
+                Ok(()) => return UpdateOutcome::InstallerLaunched,
+                Err(error) => self.status = Some(describe(&error)),
+            }
+        }
+        outcome
+    }
+
+    /// The prompt card, while there's an update to offer. Returns true if settings changed.
+    pub fn show(&mut self, ctx: &egui::Context, settings: &mut Settings) -> bool {
+        let Some(release) = self.offer.clone() else {
+            return false;
+        };
+        let mut changed = false;
+        egui::Window::new("Update available")
+            .collapsible(false)
+            .resizable(false)
+            .title_bar(false)
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-20.0, -124.0))
+            .default_width(320.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(format!("VibePlayer {} is available", release.version))
+                        .strong()
+                        .size(16.0),
+                );
+                ui.label(
+                    RichText::new(format!("You have {}.", update::current_version()))
+                        .color(theme::TEXT_DIM)
+                        .small(),
+                );
+                if !release.notes.trim().is_empty() {
+                    egui::CollapsingHeader::new("What's new").show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(140.0)
+                            .show(ui, |ui| {
+                                ui.label(release.notes.trim());
+                            });
+                    });
+                }
+                ui.add_space(6.0);
+                if let Some(download) = &self.download {
+                    let (received, total) = download.progress();
+                    let fraction = total.map_or(0.0, |t| received as f32 / t.max(1) as f32);
+                    ui.add(egui::ProgressBar::new(fraction).text("Downloading…"));
+                    if ui.button("Cancel").clicked() {
+                        download.cancel();
+                    }
+                    ctx.request_repaint();
+                    return;
+                }
+                if let Some(status) = &self.status {
+                    ui.label(RichText::new(status).color(theme::DANGER));
+                }
+                ui.horizontal(|ui| {
+                    let update =
+                        egui::Button::new(RichText::new("Update").strong()).fill(theme::ACCENT);
+                    if ui.add(update).clicked() {
+                        match release.installer.clone() {
+                            Some(asset) if cfg!(windows) => {
+                                self.status = None;
+                                self.download = Some(Download::start(asset));
+                            }
+                            _ => ctx.open_url(egui::OpenUrl::new_tab(&release.page)),
+                        }
+                    }
+                    if ui.button("Ask later").clicked() {
+                        self.offer = None;
+                    }
+                    if ui.button("Skip this version").clicked() {
+                        settings.updates.skipped_version = Some(release.version.to_string());
+                        self.offer = None;
+                        changed = true;
+                    }
+                });
+            });
+        changed
+    }
+}
+
+fn describe(error: &UpdateError) -> String {
+    match error {
+        UpdateError::Network(message) if message.contains("404") => {
+            "No releases have been published yet.".into()
+        }
+        other => format!("Update failed: {other}"),
+    }
+}
+
+/// Starts the installer quietly; it closes and restarts VibePlayer itself.
+fn launch_installer(path: std::path::PathBuf) -> Result<(), UpdateError> {
+    std::process::Command::new(path)
+        .args([
+            "/SILENT",
+            "/SP-",
+            "/NOCANCEL",
+            "/CLOSEAPPLICATIONS",
+            "/RESTARTAPPLICATIONS",
+        ])
+        .spawn()
+        .map(drop)
+        .map_err(UpdateError::Io)
+}

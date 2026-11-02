@@ -21,6 +21,7 @@ pub enum Icon {
     Close,
     Folder,
     Subtitles,
+    Settings,
 }
 
 pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -134,6 +135,18 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             );
             painter.line_segment([p(-0.5, 0.2), p(0.1, 0.2)], stroke);
             painter.line_segment([p(0.25, 0.2), p(0.5, 0.2)], stroke);
+        }
+        Icon::Settings => {
+            for tooth in 0..8 {
+                let angle = tooth as f32 * std::f32::consts::FRAC_PI_4;
+                let (sin, cos) = angle.sin_cos();
+                painter.line_segment(
+                    [p(cos * 0.55, sin * 0.55), p(cos * 0.85, sin * 0.85)],
+                    Stroke::new(stroke.width * 1.6, color),
+                );
+            }
+            painter.circle_stroke(c, s * 0.55, stroke);
+            painter.circle_filled(c, s * 0.18, color);
         }
     }
 }

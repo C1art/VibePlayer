@@ -32,6 +32,8 @@ pub struct VibePlayerApp {
     pub(crate) osd: Osd,
     pub(crate) info_open: bool,
     pub(crate) help_open: bool,
+    pub(crate) settings_open: bool,
+    pub(crate) updates: crate::updates::Updates,
     pub(crate) high_bit_depth: Option<bool>,
     pub(crate) last_activity: Instant,
     pub(crate) last_scrub: Option<Instant>,
@@ -63,6 +65,8 @@ impl VibePlayerApp {
             osd: Osd::default(),
             info_open: false,
             help_open: false,
+            settings_open: false,
+            updates: crate::updates::Updates::default(),
             high_bit_depth,
             last_activity: Instant::now(),
             last_scrub: None,
@@ -73,6 +77,7 @@ impl VibePlayerApp {
             fullscreen: false,
             editor: None,
         };
+        app.updates.start_automatic(&app.settings);
         if let Some(path) = initial_file {
             app.open(path, Instant::now());
         }
@@ -281,6 +286,29 @@ impl eframe::App for VibePlayerApp {
         };
         if self.help_open {
             shortcuts::show_help(&ctx, &mut self.help_open);
+        }
+        let mut settings_changed = false;
+        if self.settings_open {
+            settings_changed |= crate::settings_window::show(
+                &ctx,
+                &mut self.settings_open,
+                &mut self.settings,
+                &mut self.updates,
+            );
+        }
+        match self.updates.poll(&mut self.settings) {
+            crate::updates::UpdateOutcome::SettingsChanged => settings_changed = true,
+            crate::updates::UpdateOutcome::InstallerLaunched => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            crate::updates::UpdateOutcome::None => {}
+        }
+        settings_changed |= self.updates.show(&ctx, &mut self.settings);
+        if settings_changed {
+            self.save_settings();
+        }
+        if self.updates.is_busy() {
+            ctx.request_repaint_after(Duration::from_millis(200));
         }
         if self.osd.paint(ui, area) {
             ctx.request_repaint_after(Duration::from_millis(30));

@@ -1,5 +1,7 @@
-// Filled in by build.rs. Add `1 ICON "icon.ico"` here once the app has an icon.
+// Filled in by build.rs.
 #include <winver.h>
+
+1 ICON "@ICON@"
 
 1 VERSIONINFO
 FILEVERSION @VERSION_NUMBERS@

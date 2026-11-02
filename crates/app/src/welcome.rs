@@ -15,6 +15,16 @@ pub fn show(
     actions: &mut Vec<Action>,
 ) {
     let area = ui.max_rect();
+    let gear = egui::Rect::from_min_size(
+        area.right_top() + egui::vec2(-52.0, 14.0),
+        egui::vec2(36.0, 36.0),
+    );
+    let mut corner = ui.new_child(egui::UiBuilder::new().max_rect(gear));
+    if crate::widgets::icon_button(&mut corner, Icon::Settings, 36.0, "Settings (Ctrl + ,)")
+        .clicked()
+    {
+        actions.push(Action::ToggleSettings);
+    }
     ui.scope_builder(egui::UiBuilder::new().max_rect(area), |ui| {
         ui.with_layout(Layout::top_down(Align::Center), |ui| {
             ui.add_space((area.height() * 0.22).max(24.0));

@@ -30,8 +30,9 @@ impl VibePlayerApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!self.fullscreen));
             }
             Action::ExitFullscreen => {
-                if self.help_open {
+                if self.help_open || self.settings_open {
                     self.help_open = false;
+                    self.settings_open = false;
                 } else if self.info_open {
                     self.info_open = false;
                 } else if self.fullscreen {
@@ -44,6 +45,7 @@ impl VibePlayerApp {
                 }
             }
             Action::ToggleHelp => self.help_open = !self.help_open,
+            Action::ToggleSettings => self.settings_open = !self.settings_open,
             Action::ToggleEditor => self.toggle_editor(),
             Action::TrimStartHere => self.set_trim_point(true),
             Action::TrimEndHere => self.set_trim_point(false),
@@ -131,6 +133,7 @@ impl VibePlayerApp {
             | Action::ExitFullscreen
             | Action::ToggleInfo
             | Action::ToggleHelp
+            | Action::ToggleSettings
             | Action::ToggleEditor
             | Action::TrimStartHere
             | Action::TrimEndHere

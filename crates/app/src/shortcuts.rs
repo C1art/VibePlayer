@@ -16,6 +16,7 @@ pub fn read(ctx: &egui::Context, seek_step: i64) -> Vec<Action> {
         };
         pressed(Modifiers::COMMAND, Key::O, Action::ShowOpenDialog);
         pressed(Modifiers::COMMAND, Key::W, Action::CloseFile);
+        pressed(Modifiers::COMMAND, Key::Comma, Action::ToggleSettings);
         pressed(
             Modifiers::SHIFT,
             Key::ArrowLeft,
@@ -115,6 +116,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("I / O", "Set trim start / end (editor)"),
     ("Ctrl + O", "Open file"),
     ("Ctrl + W", "Close file"),
+    ("Ctrl + ,", "Settings"),
     ("F1 / ?", "This list"),
 ];
 

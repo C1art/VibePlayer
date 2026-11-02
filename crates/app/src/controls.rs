@@ -133,6 +133,9 @@ pub fn show(
             if icon_button(ui, Icon::Info, 34.0, "File info (Tab)").clicked() {
                 actions.push(Action::ToggleInfo);
             }
+            if icon_button(ui, Icon::Settings, 34.0, "Settings (Ctrl + ,)").clicked() {
+                actions.push(Action::ToggleSettings);
+            }
             tracks_menu(ui, state, actions);
             let speed = format!("{}×", format_speed(state.speed));
             let response = pill_button(ui, &speed, "Playback speed ([ / ])");
