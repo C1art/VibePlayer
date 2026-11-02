@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use crossbeam::channel::{self, Receiver, SendTimeoutError, Sender};
-use cut::{StreamIndex, Ticks};
+use cut::{StreamIndex, Ticks, Timebase};
 use media::{Demuxer, MediaInfo, Packet, StreamKind, SubtitleDecoder, VideoOptions};
 
 use crate::messages::{Command, DecodedVideo, Event, Opened, PacketMessage, Shared};
@@ -269,7 +269,7 @@ impl Reader {
     fn seek(&mut self, generation: Generation, target: Ticks, exact: bool) {
         self.generation = generation;
         let start = self.info.start_time;
-        if self.demuxer.seek(start + target).is_err() {
+        if self.seek_demuxer(start + target).is_err() {
             let _ = self.demuxer.seek(start);
         }
         if let Some((_, decoder)) = &mut self.subtitle {
@@ -284,6 +284,25 @@ impl Reader {
             .flatten()
         {
             let _ = sender.send(flush());
+        }
+    }
+
+    /// Seeks in the video stream's own timebase, rounding down: rounding to the nearest tick
+    /// could land on the keyframe just after the target and skip the frame being asked for.
+    fn seek_demuxer(&mut self, absolute: Ticks) -> Result<(), media::MediaError> {
+        let video = self
+            .video
+            .stream
+            .and_then(|stream| Some((stream, self.demuxer.timebase(stream)?)));
+        match video {
+            Some((stream, timebase)) => {
+                let mut ticks = absolute.rescale(Timebase::MICROS, timebase);
+                if ticks.rescale(timebase, Timebase::MICROS) > absolute {
+                    ticks = ticks - Ticks(1);
+                }
+                self.demuxer.seek_stream(stream, ticks)
+            }
+            None => self.demuxer.seek(absolute),
         }
     }
 

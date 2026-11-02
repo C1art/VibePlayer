@@ -144,3 +144,20 @@ fn double_speed_finishes_in_half_the_time() {
     let elapsed = started.elapsed().as_secs_f64();
     assert!((1.6..2.4).contains(&elapsed), "took {elapsed}s");
 }
+
+#[test]
+#[ignore]
+fn stepping_back_from_a_keyframe_reaches_the_previous_gop() {
+    let mut player = Player::open(fixture("h264_bframes.mp4"), options(false), Instant::now());
+    run_until(&mut player, Duration::from_secs(5), |p| {
+        p.current_frame().is_some()
+    });
+    player.seek(Ticks(2_000_000), SeekMode::Exact);
+    run_until(&mut player, Duration::from_secs(5), |p| {
+        !p.is_seeking() && p.current_frame().is_some_and(|f| f.pts == Ticks(2_000_000))
+    });
+    player.step_backward(Instant::now());
+    run_until(&mut player, Duration::from_secs(5), |p| {
+        p.current_frame().is_some_and(|f| f.pts == Ticks(1_960_000))
+    });
+}
