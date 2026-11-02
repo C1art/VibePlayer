@@ -47,7 +47,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}\licenses"; DestName: "VibePlayer-LICENSE.txt"; Flags: ignoreversion
 Source: "{#FFmpegBin}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
-; FFmpeg is LGPL; its license ships with it.
+; FFmpeg's license ships with it.
 Source: "{#FFmpegDir}LICENSE.txt"; DestDir: "{app}\licenses"; DestName: "FFmpeg-LICENSE.txt"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]

@@ -52,6 +52,7 @@ pub(crate) struct SmartHead {
 
 impl SmartHead {
     pub fn new(demuxer: &Demuxer, plan: &CutPlan, until: Ticks) -> Result<SmartHead, ExportError> {
+        smart_cut_support(&demuxer.info(), plan.stream).map_err(ExportError::SmartCut)?;
         let params = demuxer.stream_params(plan.stream)?;
         let decoder = VideoDecoder::new(
             demuxer.stream_params(plan.stream)?,

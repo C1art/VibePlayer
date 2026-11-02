@@ -167,3 +167,38 @@ fn smart_cut_within_one_gop_re_encodes_the_whole_clip() {
     let (cut, skipped) = frames(&output);
     assert_eq!((cut.len(), skipped), (10, 0));
 }
+
+#[test]
+#[ignore]
+fn smart_cut_refuses_codecs_it_cannot_encode() {
+    let source = fixture("interlaced.ts");
+    let mut demuxer = Demuxer::open(&source).unwrap();
+    let stream = demuxer.best_stream(StreamKind::Video).unwrap();
+    let timebase = demuxer.timebase(stream).unwrap();
+    let origin = demuxer
+        .info()
+        .start_time
+        .rescale(Timebase::MICROS, timebase);
+    let tick = |seconds: f64| origin + Ticks::from_display_seconds(seconds, timebase);
+    let request = TrimRequest {
+        stream,
+        timebase,
+        start: tick(0.3),
+        end: tick(1.5),
+    };
+    let span = demuxer.keyframes_around(stream, request.start).unwrap();
+    let plan = request
+        .plan_smart(span.before, span.after, span.frames_until_after)
+        .unwrap();
+    let request = ExportRequest {
+        source,
+        output: output("refused.ts"),
+        plan,
+        audio: AudioChanges::default(),
+    };
+    let result = export::run(&request, &AtomicBool::new(false), &|_| {});
+    assert!(
+        matches!(result, Err(export::ExportError::SmartCut(_))),
+        "{result:?}"
+    );
+}

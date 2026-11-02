@@ -14,6 +14,8 @@ pub enum ExportError {
     OutputExists(PathBuf),
     /// The written file didn't probe as planned.
     Verification(String),
+    /// Smart cut isn't possible for this stream; the reason is for the user.
+    SmartCut(String),
     Cancelled,
 }
 
@@ -32,6 +34,7 @@ impl fmt::Display for ExportError {
             }
             ExportError::OutputExists(path) => write!(f, "{} already exists", path.display()),
             ExportError::Verification(reason) => write!(f, "the exported file is wrong: {reason}"),
+            ExportError::SmartCut(reason) => write!(f, "smart cut unavailable: {reason}"),
             ExportError::Cancelled => f.write_str("export cancelled"),
         }
     }

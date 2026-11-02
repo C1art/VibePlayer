@@ -5,20 +5,20 @@
 VibePlayer: a light Windows 11 video player in Rust with a bare-bones lossless clip trimmer. Its main job is quality playback; its second is fast clip cutting. It is not a video editor.
 
 - **Player** (default): opens straight to the video; controls auto-hide. Play/pause, skip ±, frame step, playback speed, volume/mute, audio track, embedded subtitle track, fullscreen, media keys, HDR, and a file info panel (container, codecs, resolution, frame rate, bitrate, duration, metadata).
-- **Editor** (via "Edit"): trim one clip with in/out points, adjust volume and a basic audio EQ, export. Nothing else. EQ exists only here; the player has plain volume.
+- **Editor** (via "Edit"): trim one clip with in/out points (keyframes marked on the timeline, optional snapping), adjust volume and a basic audio EQ, export. Optional smart cut for a frame-accurate start. Nothing else. EQ exists only here; the player has plain volume.
 - **Installer:** Inno Setup installer and uninstaller; registers file types so the user can choose VibePlayer to open videos.
 - **Update check:** looks for a newer GitHub release of `c1art/vibeplayer` and offers "Update", "Ask later" or "Skip this version".
 
 Priorities, in order: lightweight (fast startup, low idle CPU and memory), clean modern UI, features. When in doubt, leave it out.
 
-Out of scope: joining files, smart cut, speed changes in export, playlists, adding or editing subtitles, any other editing.
+Out of scope: joining files, speed changes in export, playlists, adding or editing subtitles, any other editing.
 
 ## Stack
 
 - Rust stable, edition 2024, target `x86_64-pc-windows-msvc`
 - UI: `egui` / `eframe`
 - GPU: `wgpu` (DX12, Vulkan fallback), WGSL shaders
-- Media: FFmpeg via our own safe wrapper over `ffmpeg-sys-next`, including `libavfilter`
+- Media: FFmpeg (GPL build, for `libx264`/`libx265` in smart cut) via our own safe wrapper over `ffmpeg-sys-next`, including `libavfilter`
 - Audio: `cpal` output; resampling, downmix, speed (`atempo`) and EQ run in `libavfilter`
 - Concurrency: `crossbeam` channels and queues
 - Persistence: `serde` + `serde_json`
@@ -39,7 +39,7 @@ Cargo workspace. Dependencies flow downward only; `cut` and `library` never depe
 - `crates/audio/` — cpal output, resampling, volume, downmix, EQ (editor preview only)
 - `crates/thumbnails/` — background seek-bar previews with a bounded cache
 - `crates/cut/` — cut planning: in/out points, keyframe snapping, timestamp rebasing (pure logic, no I/O); also the shared time types (`Ticks`, `Timebase`, `StreamIndex`)
-- `crates/export/` — runs a cut plan through `media`: stream copy, audio-only re-encode for volume/EQ, verification
+- `crates/export/` — runs a cut plan through `media`: stream copy, smart-cut head re-encode, audio-only re-encode for volume/EQ, verification
 - `crates/update/` — release check, version comparison, ask-later and skipped-version rules, installer download
 - `crates/library/` — settings, recents, resume positions, cut sessions, update preferences in `%APPDATA%\VibePlayer`
 - `installer/` — Inno Setup script (`vibeplayer.iss`) and the Windows CI workflow (`windows-ci.yml`; belongs in `.github/workflows/`, which this agent can't push)
@@ -53,7 +53,7 @@ Cargo workspace. Dependencies flow downward only; `cut` and `library` never depe
 - Format: `cargo fmt --all`
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings`
 - Test: `cargo test -p <crate>` or `cargo test --workspace`
-- Before building, set `FFMPEG_DIR` to a shared FFmpeg build, 8.1 or newer.
+- Before building, set `FFMPEG_DIR` to a shared GPL FFmpeg build, 8.1 or newer (BtbN `win64-gpl-shared`); without `libx264`/`libx265` smart cut is unavailable.
 - Linux also builds and tests, for development only; it needs `pkg-config` and the ALSA, X11 and FFmpeg dev packages. Without a sound card, run `pulseaudio -D` so audio-clock paths are exercised.
 - Release: tag `vX.Y.Z`; CI attaches `VibePlayer-X.Y.Z-setup.exe`, which the updater looks for.
 
@@ -70,7 +70,7 @@ After every change, in order: format, lint, test the changed crate. Test the who
 - **Color:** use the stream's own matrix, primaries, transfer and range. HDR passes through as scRGB `Rgba16Float` or is tone mapped to SDR.
 - **Subtitles:** embedded tracks only, text and bitmap. Never load, add or edit subtitle files.
 - **Export:**
-  - Video packets are copied byte-for-byte, never re-encoded. Audio is copied too unless volume or EQ changed; then only audio is re-encoded, and the export screen says so.
+  - Video packets are copied byte-for-byte. The one exception is the opt-in smart cut (H.264/HEVC): frames from the start up to the next keyframe are re-encoded (no B-frames, parameter sets in-band, the source's sent again before the first copied keyframe), and the editor states how many. Audio is copied unless volume or EQ changed; then only audio is re-encoded, and the export screen says so.
   - The UI shows where each cut actually lands before export. Never move a cut point silently.
   - Keep every stream (subtitles included), metadata and chapters unless the user drops them. Rebase timestamps to zero.
   - Write to a temp file, verify by probing, then rename. Never overwrite a source.
@@ -91,7 +91,7 @@ After every change, in order: format, lint, test the changed crate. Test the who
 ## Testing
 
 - Test what can break in non-obvious ways: timebase math, keyframe snapping, cut planning and rebasing, seek generations, frame stepping, version comparison and update prompts, settings migrations, audio buffer sizing.
-- Export tests check that copied packets are byte-identical to the source and the output probes as planned.
+- Export tests check that copied packets are byte-identical to the source and the output probes as planned; smart-cut tests decode the output and compare every frame with the source.
 - Don't test egui layout, trivial accessors, derived impls or third-party behavior. One test per behavior.
 - Tests needing a GPU or real decoding are `#[ignore]` and use `tests/fixtures/`: each file under 1 MB, covering open GOP, B-frames, VFR, interlaced, multiple audio tracks, HDR, MP4/MKV/TS and a truncated file.
 
@@ -100,8 +100,8 @@ After every change, in order: format, lint, test the changed crate. Test the who
 Ignored tests in `crates/app/src/smoke_tests/` that print a report and need no screen. Run with `cargo test --release -p app <name> -- --ignored --nocapture`.
 
 - `playback_speed`, `seek_latency`, `frame_step_back`, `thumbnail_generation` — `PLAY_BENCH_FILES` (`;`-separated), `PLAY_BENCH_SOFTWARE_DECODE=1`
-- `export_speed` — `PLAY_BENCH_FILES`, `PLAY_BENCH_AUDIO_REENCODE=1` (apply a volume change)
-- `random_seeks_never_panic`, `corrupt_files_never_panic`, `a_long_session_levels_off`; `_with_a_gpu` variants need a GPU
+- `export_speed` — `PLAY_BENCH_FILES`, `PLAY_BENCH_AUDIO_REENCODE=1` (apply a volume change), `PLAY_BENCH_SMART_CUT=1`
+- `random_seeks_never_panic`, `corrupt_files_never_panic`, `a_long_session_levels_off`; `random_seeks_never_panic_with_a_gpu` needs a GPU
 
 ## Working in this repo
 

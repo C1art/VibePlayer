@@ -146,6 +146,7 @@ fn export_speed() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
     let reencode = std::env::var("PLAY_BENCH_AUDIO_REENCODE").is_ok_and(|v| v == "1");
+    let smart = std::env::var("PLAY_BENCH_SMART_CUT").is_ok_and(|v| v == "1");
     let audio = if reencode {
         AudioChanges {
             gain: media::Decibels(30),
@@ -154,7 +155,9 @@ fn export_speed() {
     } else {
         AudioChanges::default()
     };
-    println!("export of {segments} trims per file (ms each; audio re-encode: {reencode})");
+    println!(
+        "export of {segments} trims per file (ms each; audio re-encode: {reencode}; smart cut: {smart})"
+    );
     let out_dir = std::env::temp_dir().join("vibeplayer-export-bench");
     let _ = std::fs::create_dir_all(&out_dir);
     for path in files() {
@@ -177,10 +180,15 @@ fn export_speed() {
                 start: at(duration.0 * segment / (segments + 1)),
                 end: at(duration.0 * (segment + 1) / (segments + 1)),
             };
-            let Ok(keyframe) = demuxer.keyframe_at_or_before(stream, request.start) else {
+            let Ok(span) = demuxer.keyframes_around(stream, request.start) else {
                 continue;
             };
-            let Ok(plan) = request.plan(keyframe) else {
+            let planned = if smart {
+                request.plan_smart(span.before, span.after, span.frames_until_after)
+            } else {
+                request.plan(span.before)
+            };
+            let Ok(plan) = planned else {
                 continue;
             };
             let extension = path

@@ -14,8 +14,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # LGPL build: decoders and muxers only, no GPL encoders, so the app can ship the DLLs.
-  FFMPEG_BUILD: ffmpeg-n8.1-latest-win64-lgpl-shared-8.1
+  # GPL build: includes libx264/libx265, which smart cut needs. VibePlayer is GPL-3.0 too.
+  FFMPEG_BUILD: ffmpeg-n8.1-latest-win64-gpl-shared-8.1
   LIBCLANG_PATH: C:\Program Files\LLVM\bin
 
 jobs:
@@ -49,7 +49,7 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-      - name: Decoding and export tests
+      - name: Decoding, export and smart cut tests
         run: cargo test -p media -p export -- --ignored
 
       - name: Release build

@@ -7,9 +7,11 @@ A light, fast video player for Windows 11 with a bare-bones lossless trimmer.
   embedded subtitles, multiple audio tracks, playback speed from 0.25× to 4× without pitch
   change, frame stepping both ways, and resume-where-you-left-off.
 - **Trims without re-encoding.** Press `E`, drag the handles (or press `I` / `O`), and export.
-  Video packets are copied byte-for-byte; the editor shows where the cut really starts, since a
-  copied video can only begin on a keyframe. Changing volume or the 3-band EQ re-encodes the
-  audio only.
+  Video packets are copied byte-for-byte. Keyframes are marked on the timeline and the start
+  can snap to them; otherwise the editor shows where the cut really starts, since a copied video
+  can only begin on a keyframe. For a frame-accurate start, turn on **smart cut**: only the
+  frames up to the next keyframe are re-encoded (H.264 and HEVC), and the editor says how many.
+  Changing volume or the 3-band EQ re-encodes the audio only.
 - **Stays out of the way.** Controls fade while playing; everything has a shortcut (`F1`).
   Opening another file from Explorer reuses the window that's already open.
 
@@ -41,8 +43,9 @@ VibePlayer checks for updates once a day and asks before installing anything.
 
 ## Build
 
-Requirements: Rust (stable), Visual Studio C++ build tools, LLVM (for bindgen), a shared
-FFmpeg 8.1+ build (for example BtbN's `win64-lgpl-shared`), and Inno Setup 6 for the installer.
+Requirements: Rust (stable), Visual Studio C++ build tools, LLVM (for bindgen), a shared GPL
+FFmpeg 8.1+ build (for example BtbN's `win64-gpl-shared`, which includes the H.264/HEVC encoders
+smart cut needs), and Inno Setup 6 for the installer.
 
 ```powershell
 $env:FFMPEG_DIR = "C:\ffmpeg"          # contains bin\, include\, lib\
@@ -66,4 +69,5 @@ Tests: `cargo test --workspace`; decoding and export tests against `tests/fixtur
 ## License
 
 VibePlayer is free software under the [GNU General Public License v3.0](LICENSE).
-FFmpeg is used as shared libraries under the LGPL; both licenses are installed next to the app.
+FFmpeg (GPL build, including x264 and x265) is used as shared libraries; its license is
+installed next to the app.
