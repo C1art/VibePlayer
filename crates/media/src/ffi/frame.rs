@@ -85,6 +85,15 @@ impl Frame {
             .map(Ticks)
     }
 
+    /// The timestamp filters maintain. Unlike the best-effort timestamp, which keeps the
+    /// decoder's value and timebase, this one follows resampling and tempo changes.
+    pub fn filtered_pts(&self) -> Option<Ticks> {
+        let raw = self.raw();
+        optional_ts(raw.pts)
+            .or(optional_ts(raw.best_effort_timestamp))
+            .map(Ticks)
+    }
+
     pub fn set_pts(&mut self, pts: Option<Ticks>) {
         // SAFETY: the frame is valid and `&mut self` guarantees exclusivity.
         let raw = unsafe { self.ptr.as_mut() };

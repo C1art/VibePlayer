@@ -16,6 +16,7 @@ pub const HEIGHT: f32 = 300.0;
 #[derive(Clone, Debug, PartialEq)]
 pub enum EditorAction {
     Close,
+    OpenFile,
     TogglePlay,
     Seek(Ticks, SeekMode),
     StepBack,
@@ -94,12 +95,16 @@ pub fn show(
             if icon_button(ui, Icon::Close, 30.0, "Back to the player (E)").clicked() {
                 actions.push(EditorAction::Close);
             }
-            if !editor.keyframes_complete() {
-                ui.label(
-                    RichText::new("Finding keyframes…")
-                        .size(12.0)
-                        .color(theme::TEXT_DIM),
-                );
+            if icon_button(ui, Icon::Folder, 30.0, "Open another file (Ctrl + O)").clicked() {
+                actions.push(EditorAction::OpenFile);
+            }
+            let busy = match (editor.keyframes_complete(), editor.waveform_complete()) {
+                (false, _) => Some("Finding keyframes…"),
+                (true, false) => Some("Reading audio…"),
+                (true, true) => None,
+            };
+            if let Some(busy) = busy {
+                ui.label(RichText::new(busy).size(12.0).color(theme::TEXT_DIM));
             }
         });
     });
@@ -114,6 +119,7 @@ pub fn show(
         keyframe_start,
         reencoded_until,
         keyframes: &keyframes,
+        waveform: editor.waveform(),
     }
     .show(ui);
     if let Some(start) = input.start {

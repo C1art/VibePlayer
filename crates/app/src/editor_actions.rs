@@ -20,7 +20,7 @@ impl VibePlayerApp {
             return;
         };
         let saved = self.history.cut_session(&opened.info.path);
-        match Editor::new(&opened.info, saved, &self.settings.editor) {
+        match Editor::new(&opened.info, opened.audio, saved, &self.settings.editor) {
             Some(editor) => {
                 session
                     .player
@@ -71,6 +71,14 @@ impl VibePlayerApp {
     pub(crate) fn apply_editor(&mut self, action: EditorAction, now: Instant) {
         match action {
             EditorAction::Close => self.close_editor(),
+            EditorAction::OpenFile => {
+                if self.open_dialog.is_none() {
+                    self.open_dialog = os::open_file_dialog();
+                    if self.open_dialog.is_none() {
+                        self.osd.show("Drop a file onto the window to open it");
+                    }
+                }
+            }
             EditorAction::SetStartHere => self.set_trim_point(true),
             EditorAction::SetEndHere => self.set_trim_point(false),
             EditorAction::Export => {

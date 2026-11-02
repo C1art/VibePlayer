@@ -22,6 +22,8 @@ pub struct Timeline<'a> {
     /// Frames re-encoded by a smart cut, from the start to here.
     pub reencoded_until: Option<Ticks>,
     pub keyframes: &'a [Ticks],
+    /// Peak loudness per equal slice of the file.
+    pub waveform: &'a [f32],
 }
 
 impl Timeline<'_> {
@@ -43,6 +45,7 @@ impl Timeline<'_> {
             pos2(rect.right(), rect.bottom() - 14.0),
         );
         painter.rect_filled(track, CornerRadius::same(8), theme::PANEL_RAISED);
+        paint_waveform(&painter, track.shrink2(vec2(2.0, 3.0)), self.waveform);
         let selected = Rect::from_x_y_ranges(x_of(self.start)..=x_of(self.end), track.y_range());
         painter.rect_filled(
             selected,
@@ -122,6 +125,36 @@ impl Timeline<'_> {
             );
         }
     }
+}
+
+/// One mirrored bar per pixel column, scaled to the loudest moment. The square root keeps
+/// quiet passages visible next to loud ones.
+fn paint_waveform(painter: &egui::Painter, area: Rect, peaks: &[f32]) {
+    let loudest = peaks.iter().copied().fold(0.0f32, f32::max);
+    if peaks.is_empty() || loudest <= 0.0 {
+        return;
+    }
+    let columns = area.width().max(1.0) as usize;
+    let half = area.height() / 2.0;
+    // Solid quads in one mesh: hairlines at fractional positions shimmer into a moiré.
+    let mut mesh = egui::Mesh::default();
+    for column in 0..columns {
+        let from = column * peaks.len() / columns;
+        let to = ((column + 1) * peaks.len() / columns)
+            .max(from + 1)
+            .min(peaks.len());
+        let peak = peaks[from..to].iter().copied().fold(0.0f32, f32::max);
+        let height = ((peak / loudest).sqrt() * half).max(0.5);
+        let x = area.left() + column as f32;
+        mesh.add_colored_rect(
+            Rect::from_min_max(
+                pos2(x, area.center().y - height),
+                pos2(x + 1.0, area.center().y + height),
+            ),
+            Color32::from_white_alpha(56),
+        );
+    }
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 fn handle(ui: &mut egui::Ui, track: Rect, x: f32, name: &str) -> egui::Response {

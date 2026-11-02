@@ -5,7 +5,7 @@
 VibePlayer: a light Windows 11 video player in Rust with a bare-bones lossless clip trimmer. Its main job is quality playback; its second is fast clip cutting. It is not a video editor.
 
 - **Player** (default): opens straight to the video; controls auto-hide. Play/pause, skip ±, frame step, playback speed, volume/mute, audio track, embedded subtitle track, fullscreen, media keys, HDR, and a file info panel (container, codecs, resolution, frame rate, bitrate, duration, metadata).
-- **Editor** (via "Edit"): trim one clip with in/out points (keyframes marked on the timeline, optional snapping), adjust volume and a basic audio EQ, export. Optional smart cut for a frame-accurate start. Nothing else. EQ exists only here; the player has plain volume.
+- **Editor** (via "Edit"): trim one clip with in/out points (keyframes and the audio waveform shown on the timeline, optional snapping), adjust volume and a basic audio EQ, export. Optional smart cut for a frame-accurate start. Nothing else. EQ exists only here; the player has plain volume.
 - **Installer:** Inno Setup installer and uninstaller; registers file types so the user can choose VibePlayer to open videos.
 - **Update check:** looks for a newer GitHub release of `c1art/vibeplayer` and offers "Update", "Ask later" or "Skip this version".
 
