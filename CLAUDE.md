@@ -19,13 +19,13 @@ Out of scope: joining files, smart cut, speed changes in export, playlists, addi
 - UI: `egui` / `eframe`
 - GPU: `wgpu` (DX12, Vulkan fallback), WGSL shaders
 - Media: FFmpeg via our own safe wrapper over `ffmpeg-sys-next`, including `libavfilter`
-- Audio: `cpal` output, `rubato` resampling
+- Audio: `cpal` output; resampling, downmix, speed (`atempo`) and EQ run in `libavfilter`
 - Concurrency: `crossbeam` channels and queues
 - Persistence: `serde` + `serde_json`
 - Windows: `windows` crate, `cfg(windows)` only — D3D12/DXGI texture sharing, HDR output, SMTC, taskbar, file associations
 - Exe resources: `embed-resource` (build dependency of `app`) — icon and version info
 - Installer: Inno Setup 6
-- Update check: `ureq` (HTTPS client) against the GitHub Releases API, `semver` for version comparison
+- Update check: `ureq` (HTTPS, system trust store via `platform-verifier`) against the GitHub Releases API, `semver` for version comparison
 - Ask before adding any dependency not listed here.
 
 ## Structure
@@ -38,12 +38,12 @@ Cargo workspace. Dependencies flow downward only; `cut` and `library` never depe
 - `crates/render/` — wgpu presentation, color conversion, HDR; shaders in `render/shaders/*.wgsl`
 - `crates/audio/` — cpal output, resampling, volume, downmix, EQ (editor preview only)
 - `crates/thumbnails/` — background seek-bar previews with a bounded cache
-- `crates/cut/` — cut planning: in/out points, keyframe snapping, timestamp rebasing (pure logic, no I/O)
+- `crates/cut/` — cut planning: in/out points, keyframe snapping, timestamp rebasing (pure logic, no I/O); also the shared time types (`Ticks`, `Timebase`, `StreamIndex`)
 - `crates/export/` — runs a cut plan through `media`: stream copy, audio-only re-encode for volume/EQ, verification
 - `crates/update/` — release check, version comparison, ask-later and skipped-version rules, installer download
 - `crates/library/` — settings, recents, resume positions, cut sessions, update preferences in `%APPDATA%\VibePlayer`
-- `installer/` — Inno Setup script (`vibeplayer.iss`)
-- `tests/fixtures/` — small media files for integration tests
+- `installer/` — Inno Setup script (`vibeplayer.iss`) and the Windows CI workflow (`windows-ci.yml`; belongs in `.github/workflows/`, which this agent can't push)
+- `tests/fixtures/` — small media files for integration tests; regenerate with `generate.sh`
 
 ## Commands
 
@@ -54,13 +54,14 @@ Cargo workspace. Dependencies flow downward only; `cut` and `library` never depe
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings`
 - Test: `cargo test -p <crate>` or `cargo test --workspace`
 - Before building, set `FFMPEG_DIR` to a shared FFmpeg build, 8.1 or newer.
-- Linux also builds and tests, for development only; it needs `pkg-config` and the ALSA, X11 and FFmpeg dev packages.
+- Linux also builds and tests, for development only; it needs `pkg-config` and the ALSA, X11 and FFmpeg dev packages. Without a sound card, run `pulseaudio -D` so audio-clock paths are exercised.
+- Release: tag `vX.Y.Z`; CI attaches `VibePlayer-X.Y.Z-setup.exe`, which the updater looks for.
 
 After every change, in order: format, lint, test the changed crate. Test the whole workspace before committing.
 
 ## Architecture rules
 
-- **Time:** integer `Ticks` with a rational timebase; `f64` seconds only for display. Cut points use the source stream's timebase.
+- **Time:** integer `Ticks` with a rational timebase; `f64` seconds only for display. The player timeline is microseconds from the file's start time; cut points use the source stream's timebase (absolute, so add the file start time when converting).
 - **Threads:** the UI thread never decodes, does I/O or waits on a channel. Workers report back over `crossbeam` channels, polled each frame.
 - **Audio callback:** no allocation, locks, blocking or logging. Reads only a pre-filled lock-free queue.
 - **Clock:** audio is master; video drops or repeats frames to follow. No audio → monotonic system clock. Playback speed uses `atempo`, never pitch-shifting.
