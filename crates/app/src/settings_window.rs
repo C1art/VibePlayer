@@ -68,7 +68,7 @@ pub fn show(
             changed |= widgets::toggle(
                 ui,
                 &mut settings.updates.check_automatically,
-                "Check for updates once a day",
+                "Check for updates automatically",
             )
             .changed();
             ui.horizontal(|ui| {

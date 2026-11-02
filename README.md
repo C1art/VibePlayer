@@ -21,7 +21,7 @@ A light, fast video player for Windows 11 with a bare-bones lossless trimmer.
 Download `VibePlayer-x.y.z-setup.exe` from
 [Releases](https://github.com/c1art/vibeplayer/releases) and run it. No admin rights needed.
 To make VibePlayer open your videos, choose it in **Settings → Apps → Default apps**.
-VibePlayer checks for updates once a day and asks before installing anything.
+VibePlayer checks for updates when it starts and asks before installing anything.
 
 ## Shortcuts
 

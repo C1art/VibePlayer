@@ -75,7 +75,7 @@ After every change, in order: format, lint, test the changed crate. Test the who
   - Keep every stream (subtitles included), metadata and chapters unless the user drops them. Rebase timestamps to zero.
   - Write to a temp file, verify by probing, then rename. Never overwrite a source.
 - **Single instance:** a second launch forwards its file to the running window over a per-user named pipe (Unix socket on Linux) and exits.
-- **Updates:** check on a worker at most once a day, never slowing startup. "Update" downloads the release's installer, runs it and exits; nothing downloads or installs otherwise. "Ask later" asks again on the next check. "Skip this version" stays quiet until a newer one. A failed check is silent.
+- **Updates:** check on a worker at every launch (and daily while the app stays open), never slowing startup; a newer release prompts right away. "Update" downloads the release's installer, runs it and exits; nothing downloads or installs otherwise. "Ask later" asks again on the next check. "Skip this version" stays quiet until a newer one. A failed check is silent.
 - **Bad media:** files are untrusted. Corrupt input yields an error or a skipped frame, never a panic or hang.
 - **FFmpeg:** raw pointers live in owning types with `Drop`; only safe APIs leave `media/src/ffi/`. Every `unsafe` block has a `// SAFETY:` comment.
 - **Persisted files:** versioned; new fields use `#[serde(default)]`; breaking changes add a migration in `library`.
