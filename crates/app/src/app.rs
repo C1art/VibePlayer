@@ -122,8 +122,6 @@ impl VibePlayerApp {
                 cut::ClockTime::new(start, cut::Timebase::MICROS, cut::ClockPrecision::Seconds);
             self.osd.show(format!("Resuming at {resumed}"));
         }
-        self.history.add_recent(&path, unix_now());
-        self.save_history();
         self.error = None;
         self.session = Some(Session::open(path, options, now));
     }
@@ -190,6 +188,11 @@ impl VibePlayerApp {
             }
             LoadState::Ready(_) if !session.title_shown => {
                 session.title_shown = true;
+                // Only files that actually opened belong in Recent.
+                self.history.add_recent(session.player.path(), unix_now());
+                if let Some(saver) = &self.saver {
+                    saver.save_history(&self.history);
+                }
                 let title = format!("{} — VibePlayer", session.file_name());
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
             }
@@ -311,6 +314,7 @@ impl eframe::App for VibePlayerApp {
                 &mut self.updates,
             );
         }
+        self.updates.tick(&self.settings);
         match self.updates.poll(&mut self.settings) {
             crate::updates::UpdateOutcome::SettingsChanged => settings_changed = true,
             crate::updates::UpdateOutcome::InstallerLaunched => {
@@ -324,6 +328,9 @@ impl eframe::App for VibePlayerApp {
         }
         if self.updates.is_busy() {
             ctx.request_repaint_after(Duration::from_millis(200));
+        } else {
+            // Wakes an idle window now and then so the daily re-check can run.
+            ctx.request_repaint_after(Duration::from_secs(3600));
         }
         if self.osd.paint(ui, area) {
             ctx.request_repaint_after(Duration::from_millis(30));

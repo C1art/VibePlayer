@@ -47,7 +47,7 @@ pub struct EditorPreferences {
 #[serde(default)]
 pub struct UpdatePreferences {
     pub check_automatically: bool,
-    /// Unix seconds of the last completed check.
+    /// Unix seconds of the last successful check.
     pub last_check: Option<u64>,
     /// A version the user chose to skip, e.g. `1.2.0`.
     pub skipped_version: Option<String>,

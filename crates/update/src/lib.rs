@@ -10,7 +10,7 @@ mod release;
 pub use check::{UpdateCheck, check_now};
 pub use download::{Download, DownloadState};
 pub use error::UpdateError;
-pub use policy::{CHECK_INTERVAL_SECONDS, is_check_due, should_offer};
+pub use policy::{RECHECK_INTERVAL, should_offer};
 pub use release::{Asset, Release};
 
 /// Where releases are published.

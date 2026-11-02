@@ -1,11 +1,7 @@
 use semver::Version;
 
-/// Automatic checks happen at most once a day.
-pub const CHECK_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
-
-pub fn is_check_due(last_check: Option<u64>, now: u64) -> bool {
-    last_check.is_none_or(|last| now.saturating_sub(last) >= CHECK_INTERVAL_SECONDS || last > now)
-}
+/// While the app stays open, it checks again this often.
+pub const RECHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
 /// A release is offered when it's newer than this build and wasn't skipped. A skip only
 /// covers that exact version, so a later release is offered again.
@@ -20,21 +16,6 @@ mod tests {
 
     fn v(text: &str) -> Version {
         Version::parse(text).unwrap()
-    }
-
-    #[test]
-    fn checks_run_once_a_day() {
-        assert!(is_check_due(None, 1_000));
-        assert!(!is_check_due(
-            Some(1_000),
-            1_000 + CHECK_INTERVAL_SECONDS - 1
-        ));
-        assert!(is_check_due(Some(1_000), 1_000 + CHECK_INTERVAL_SECONDS));
-    }
-
-    #[test]
-    fn a_clock_set_backwards_does_not_block_checks() {
-        assert!(is_check_due(Some(5_000), 1_000));
     }
 
     #[test]

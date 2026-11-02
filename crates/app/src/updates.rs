@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use eframe::egui::{self, RichText};
 use library::Settings;
 use update::{Download, Release, UpdateCheck, UpdateError};
@@ -10,6 +12,8 @@ use crate::theme;
 #[derive(Default)]
 pub struct Updates {
     check: Option<(UpdateCheck, bool)>,
+    /// When the last automatic check started, for the daily re-check while running.
+    last_automatic: Option<Instant>,
     offer: Option<Release>,
     download: Option<Download>,
     /// Feedback for checks the user started from Settings.
@@ -24,12 +28,21 @@ pub enum UpdateOutcome {
 }
 
 impl Updates {
-    /// Starts the daily automatic check if it's due.
+    /// Checks in the background at launch, so a new release is offered right away.
     pub fn start_automatic(&mut self, settings: &Settings) {
-        if settings.updates.check_automatically
-            && update::is_check_due(settings.updates.last_check, unix_now())
-        {
+        if settings.updates.check_automatically && self.check.is_none() {
+            self.last_automatic = Some(Instant::now());
             self.check = Some((UpdateCheck::start(), false));
+        }
+    }
+
+    /// Checks again once a day for people who leave the player open.
+    pub fn tick(&mut self, settings: &Settings) {
+        let due = self
+            .last_automatic
+            .is_some_and(|last| last.elapsed() >= update::RECHECK_INTERVAL);
+        if due && self.offer.is_none() && self.download.is_none() {
+            self.start_automatic(settings);
         }
     }
 
@@ -51,11 +64,11 @@ impl Updates {
         {
             let manual = *manual;
             self.check = None;
-            settings.updates.last_check = Some(unix_now());
-            outcome = UpdateOutcome::SettingsChanged;
             self.status = None;
             match result {
                 Ok(release) => {
+                    settings.updates.last_check = Some(unix_now());
+                    outcome = UpdateOutcome::SettingsChanged;
                     let skipped = if manual {
                         None
                     } else {
