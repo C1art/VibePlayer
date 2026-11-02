@@ -7,7 +7,8 @@ A light, fast video player for Windows 11 with a bare-bones lossless trimmer.
   embedded subtitles, multiple audio tracks, playback speed from 0.25× to 4× without pitch
   change, frame stepping both ways, and resume-where-you-left-off.
 - **Trims without re-encoding.** Press `E`, drag the handles (or press `I` / `O`), and export.
-  Video packets are copied byte-for-byte. Keyframes are marked on the timeline and the start
+  Video packets are copied byte-for-byte. The timeline shows the audio waveform and marks
+  keyframes, and the start
   can snap to them; otherwise the editor shows where the cut really starts, since a copied video
   can only begin on a keyframe. For a frame-accurate start, turn on **smart cut**: only the
   frames up to the next keyframe are re-encoded (H.264 and HEVC), and the editor says how many.
@@ -38,7 +39,7 @@ VibePlayer checks for updates once a day and asks before installing anything.
 | F, double-click | Fullscreen |
 | Tab | File info |
 | E | Trim editor; I / O set start / end |
-| Ctrl + O / Ctrl + W | Open / close file |
+| Ctrl + O / Ctrl + W | Open / close file (also the folder button in the controls) |
 | Ctrl + , | Settings |
 
 ## Build
