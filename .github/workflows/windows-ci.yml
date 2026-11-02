@@ -1,0 +1,76 @@
+# Windows CI: lint, test, build the installer, publish on v* tags.
+# Move this file to .github/workflows/windows.yml to enable it.
+name: Windows
+
+on:
+  push:
+    branches: [dev, main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # GPL build: includes libx264/libx265, which smart cut needs. VibePlayer is GPL-3.0 too.
+  FFMPEG_BUILD: ffmpeg-n8.1-latest-win64-gpl-shared-8.1
+  LIBCLANG_PATH: C:\Program Files\LLVM\bin
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Download FFmpeg
+        shell: pwsh
+        run: |
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$env:FFMPEG_BUILD.zip"
+          Invoke-WebRequest $url -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
+          Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" -DestinationPath $env:RUNNER_TEMP
+          $dir = Join-Path $env:RUNNER_TEMP $env:FFMPEG_BUILD
+          "FFMPEG_DIR=$dir" >> $env:GITHUB_ENV
+          "$dir\bin" >> $env:GITHUB_PATH
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Decoding, export and smart cut tests
+        run: cargo test -p media -p export -- --ignored
+
+      - name: Release build
+        run: cargo build --release
+
+      - name: Installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc installer\vibeplayer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VibePlayer-installer
+          path: target/installer/*.exe
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/installer/*.exe
+          generate_release_notes: true
