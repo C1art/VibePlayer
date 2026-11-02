@@ -15,6 +15,8 @@ mod seek_bar;
 mod session;
 mod settings_window;
 mod shortcuts;
+#[cfg(test)]
+mod smoke_tests;
 mod subtitles;
 mod theme;
 mod updates;
