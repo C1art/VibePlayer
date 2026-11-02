@@ -77,7 +77,7 @@ impl ColorParams {
                 } else {
                     0.0
                 },
-                0.0,
+                if layout.interleaved_chroma { 1.0 } else { 0.0 },
                 0.0,
                 0.0,
             ],
@@ -127,6 +127,7 @@ mod tests {
         bits: 8,
         chroma_shift_x: 1,
         chroma_shift_y: 1,
+        interleaved_chroma: false,
     };
 
     fn bt709_limited() -> ColorInfo {
@@ -204,6 +205,22 @@ mod tests {
         let hdr = ColorParams::new(hdr, EIGHT_BIT, Some(4000.0), false);
         assert_eq!(hdr.flags[0], 1.0);
         assert!((hdr.misc[2] - 4000.0 / 203.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn interleaved_chroma_is_flagged_for_the_shader() {
+        let nv12 = PlaneLayout {
+            interleaved_chroma: true,
+            ..EIGHT_BIT
+        };
+        assert_eq!(
+            ColorParams::new(bt709_limited(), nv12, None, false).flags[1],
+            1.0
+        );
+        assert_eq!(
+            ColorParams::new(bt709_limited(), EIGHT_BIT, None, false).flags[1],
+            0.0
+        );
     }
 
     #[test]

@@ -29,6 +29,8 @@ pub struct PlaneLayout {
     /// Chroma planes are this many powers of two narrower and shorter than luma.
     pub chroma_shift_x: u8,
     pub chroma_shift_y: u8,
+    /// U and V share plane 1, interleaved (NV12, P010), as hardware decoders produce them.
+    pub interleaved_chroma: bool,
 }
 
 impl PlaneLayout {
@@ -37,6 +39,18 @@ impl PlaneLayout {
     }
 
     fn from_format_name(name: &str) -> Option<PlaneLayout> {
+        let interleaved = |bits| PlaneLayout {
+            bits,
+            chroma_shift_x: 1,
+            chroma_shift_y: 1,
+            interleaved_chroma: true,
+        };
+        match name {
+            "nv12" => return Some(interleaved(8)),
+            // P010 keeps its 10 bits at the top of each 16-bit sample, so it reads as 16-bit.
+            "p010le" => return Some(interleaved(16)),
+            _ => {}
+        }
         let (bits, rest) = match name.strip_suffix("le") {
             Some(base) => {
                 let digits_at = base.rfind('p')? + 1;
@@ -54,13 +68,15 @@ impl PlaneLayout {
             bits,
             chroma_shift_x,
             chroma_shift_y,
+            interleaved_chroma: false,
         })
     }
 }
 
-const EIGHT_BIT_FORMATS: &str = "yuv420p|yuv422p|yuv444p";
-const HIGH_BIT_FORMATS: &str = "yuv420p|yuv422p|yuv444p|yuv420p10le|yuv422p10le|yuv444p10le|\
-yuv420p12le|yuv422p12le|yuv444p12le";
+// NV12 and P010 are what hardware decoders download as; listing them avoids a CPU conversion.
+const EIGHT_BIT_FORMATS: &str = "nv12|yuv420p|yuv422p|yuv444p";
+const HIGH_BIT_FORMATS: &str = "nv12|p010le|yuv420p|yuv422p|yuv444p|yuv420p10le|yuv422p10le|\
+yuv444p10le|yuv420p12le|yuv422p12le|yuv444p12le";
 
 /// A decoded, display-ready frame in planar YUV.
 pub struct VideoFrame {
@@ -85,7 +101,7 @@ impl VideoFrame {
         self.frame.height()
     }
 
-    /// Plane `index` (0 = Y, 1 = U, 2 = V) as `(bytes, stride)`.
+    /// Plane `index` (0 = Y, 1 = U or interleaved UV, 2 = V) as `(bytes, stride)`.
     pub fn plane(&self, index: usize) -> Option<(&[u8], usize)> {
         if index > 2 {
             return None;
@@ -371,6 +387,12 @@ mod tests {
         assert_eq!(layout("yuv420p"), Some((8, 1, 1)));
         assert_eq!(layout("yuv422p10le"), Some((10, 1, 0)));
         assert_eq!(layout("yuv444p12le"), Some((12, 0, 0)));
-        assert_eq!(layout("nv12"), None);
+        assert_eq!(layout("nv12"), Some((8, 1, 1)));
+        assert!(
+            PlaneLayout::from_format_name("p010le")
+                .unwrap()
+                .interleaved_chroma
+        );
+        assert_eq!(layout("rgb24"), None);
     }
 }

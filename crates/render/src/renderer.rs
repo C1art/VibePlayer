@@ -6,7 +6,8 @@ const UNIFORM_SIZE: u64 = 9 * 16;
 
 struct PlaneTextures {
     key: (u32, u32, PlaneLayout),
-    textures: [wgpu::Texture; 3],
+    /// Y, U, V; or Y and interleaved UV.
+    textures: Vec<wgpu::Texture>,
     bind_group: wgpu::BindGroup,
 }
 
@@ -144,7 +145,12 @@ impl VideoRenderer {
                 return;
             };
             let size = texture.size();
-            let row_bytes = size.width as usize * layout.bytes_per_sample();
+            let samples_per_texel = if index == 1 && layout.interleaved_chroma {
+                2
+            } else {
+                1
+            };
+            let row_bytes = size.width as usize * layout.bytes_per_sample() * samples_per_texel;
             let needed = stride * (size.height as usize - 1) + row_bytes;
             if bytes.len() < needed || stride < row_bytes {
                 return;
@@ -175,42 +181,53 @@ impl VideoRenderer {
 
     fn create_planes(&self, device: &wgpu::Device, key: (u32, u32, PlaneLayout)) -> PlaneTextures {
         let (width, height, layout) = key;
-        let format = if layout.bits > 8 {
-            wgpu::TextureFormat::R16Unorm
-        } else {
-            wgpu::TextureFormat::R8Unorm
+        let high = layout.bits > 8;
+        let (luma_format, chroma_format) = match (high, layout.interleaved_chroma) {
+            (false, false) => (wgpu::TextureFormat::R8Unorm, wgpu::TextureFormat::R8Unorm),
+            (false, true) => (wgpu::TextureFormat::R8Unorm, wgpu::TextureFormat::Rg8Unorm),
+            (true, false) => (wgpu::TextureFormat::R16Unorm, wgpu::TextureFormat::R16Unorm),
+            (true, true) => (
+                wgpu::TextureFormat::R16Unorm,
+                wgpu::TextureFormat::Rg16Unorm,
+            ),
         };
         let chroma = |size: u32, shift: u8| size.div_ceil(1 << shift).max(1);
-        let sizes = [
-            (width.max(1), height.max(1)),
-            (
-                chroma(width, layout.chroma_shift_x),
-                chroma(height, layout.chroma_shift_y),
-            ),
-            (
-                chroma(width, layout.chroma_shift_x),
-                chroma(height, layout.chroma_shift_y),
-            ),
+        let chroma_size = (
+            chroma(width, layout.chroma_shift_x),
+            chroma(height, layout.chroma_shift_y),
+        );
+        let mut planes = vec![
+            ((width.max(1), height.max(1)), luma_format),
+            (chroma_size, chroma_format),
         ];
-        let textures = sizes.map(|(width, height)| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("video plane"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
+        if !layout.interleaved_chroma {
+            planes.push((chroma_size, chroma_format));
+        }
+        let textures: Vec<wgpu::Texture> = planes
+            .into_iter()
+            .map(|((width, height), format)| {
+                device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("video plane"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                })
             })
-        });
-        let views = textures
-            .each_ref()
-            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()));
+            .collect();
+        let views: Vec<wgpu::TextureView> = textures
+            .iter()
+            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
+            .collect();
+        // With interleaved chroma the shader reads V from plane_u too; bind it twice.
+        let v_view = views.get(2).unwrap_or(&views[1]);
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("video planes"),
             layout: &self.layout,
@@ -229,7 +246,7 @@ impl VideoRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&views[2]),
+                    resource: wgpu::BindingResource::TextureView(v_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,

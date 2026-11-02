@@ -10,7 +10,8 @@ struct Params {
     // x: sample scale, y: transfer (0 SDR, 1 PQ, 2 HLG), z: peak / SDR white, w: 1 if the
     // target expects linear values (sRGB format).
     misc: vec4<f32>,
-    // x: 1 if colors need linear-light processing (HDR or wide gamut).
+    // x: 1 if colors need linear-light processing (HDR or wide gamut); y: 1 if U and V are
+    // interleaved in plane_u (NV12, P010).
     flags: vec4<f32>,
 };
 
@@ -85,8 +86,13 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let scale = params.misc.x;
     let y = (textureSample(plane_y, plane_sampler, in.uv).r * scale - params.range.x) * params.range.y;
-    let cb = (textureSample(plane_u, plane_sampler, in.uv).r * scale - params.range.z) * params.range.w;
-    let cr = (textureSample(plane_v, plane_sampler, in.uv).r * scale - params.range.z) * params.range.w;
+    let chroma = textureSample(plane_u, plane_sampler, in.uv);
+    var v_sample = textureSample(plane_v, plane_sampler, in.uv).r;
+    if (params.flags.y > 0.5) {
+        v_sample = chroma.g;
+    }
+    let cb = (chroma.r * scale - params.range.z) * params.range.w;
+    let cr = (v_sample * scale - params.range.z) * params.range.w;
     let ycc = vec3<f32>(y, cb, cr);
     var rgb = clamp(
         vec3<f32>(dot(params.rows[0].xyz, ycc), dot(params.rows[1].xyz, ycc), dot(params.rows[2].xyz, ycc)),

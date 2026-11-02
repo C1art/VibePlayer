@@ -173,6 +173,16 @@ fn resident_memory() -> Option<u64> {
     Some(pages * 4096)
 }
 
+fn thread_count() -> Option<usize> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Threads:"))?
+        .trim()
+        .parse()
+        .ok()
+}
+
 #[test]
 #[ignore]
 fn a_long_session_levels_off() {
@@ -195,7 +205,8 @@ fn a_long_session_levels_off() {
         std::thread::sleep(Duration::from_millis(300));
         if let Some(memory) = resident_memory() {
             readings.push(memory);
-            println!("  round {round}: {:.1} MB", memory as f64 / 1e6);
+            let threads = thread_count().map_or_else(String::new, |n| format!(", {n} threads"));
+            println!("  round {round}: {:.1} MB{threads}", memory as f64 / 1e6);
         }
     }
     if readings.len() >= 12 {

@@ -49,6 +49,10 @@ ff -f lavfi -i "$video:duration=2" \
   -x265-params "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:range=limited:master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1):max-cll=1000,400:hdr10=1:log-level=error" \
   -color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc hdr10.mkv
 
+# Solid colors in the layouts hardware decoders hand back, for renderer color checks.
+ff -f lavfi -i "color=c=red:size=160x90:rate=25:duration=0.12" -c:v rawvideo -pix_fmt nv12 red_nv12.mkv
+ff -f lavfi -i "color=c=red:size=160x90:rate=25:duration=0.12" -c:v rawvideo -pix_fmt yuv420p red_yuv420p.mkv
+
 # Truncated: the general fixture cut off partway through its media data.
 head -c 40000 h264_bframes.mp4 > truncated.mp4
 

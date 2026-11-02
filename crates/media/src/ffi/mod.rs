@@ -27,10 +27,16 @@ pub use packet::Packet;
 pub use params::StreamParams;
 pub use subtitle::RawSubtitleRect;
 
-/// Lowers FFmpeg's own logging to errors only; we report problems through our own types.
+/// Lowers FFmpeg's own logging (errors only in debug builds, nothing in release); problems
+/// are reported through our own types.
 pub fn quiet_logging() {
+    let level = if cfg!(debug_assertions) {
+        sys::AV_LOG_ERROR
+    } else {
+        sys::AV_LOG_QUIET
+    };
     // SAFETY: av_log_set_level only stores an integer.
-    unsafe { sys::av_log_set_level(sys::AV_LOG_ERROR) };
+    unsafe { sys::av_log_set_level(level) };
 }
 
 fn check(code: c_int, operation: &'static str) -> Result<c_int, MediaError> {
