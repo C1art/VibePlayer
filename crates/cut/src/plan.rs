@@ -140,6 +140,19 @@ impl CutPlan {
         pts >= start && pts < end
     }
 
+    /// For a cue shown from `pts` for `duration` (in `timebase`) that starts before the cut:
+    /// the part still on screen when the cut begins, as a new start and duration.
+    pub fn on_screen_at_start(
+        &self,
+        pts: Ticks,
+        duration: Ticks,
+        timebase: Timebase,
+    ) -> Option<(Ticks, Ticks)> {
+        let (start, end) = self.range_in(timebase);
+        let cue_end = pts + duration;
+        (pts < start && cue_end > start).then(|| (start, cue_end.min(end) - start))
+    }
+
     /// Moves a timestamp so the cut starts at zero.
     pub fn rebase(&self, ticks: Ticks, timebase: Timebase) -> Ticks {
         ticks - self.start.rescale(self.timebase, timebase)
@@ -157,6 +170,24 @@ impl CutPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cue_still_showing_at_the_start_is_shortened_to_begin_there() {
+        let plan = CutPlan {
+            stream: StreamIndex(0),
+            timebase: Timebase::MILLIS,
+            requested_start: Ticks(5_000),
+            start: Ticks(5_000),
+            end: Ticks(9_000),
+            reencode: None,
+        };
+        let cue =
+            |pts, duration| plan.on_screen_at_start(Ticks(pts), Ticks(duration), Timebase::MILLIS);
+        assert_eq!(cue(4_800, 2_200), Some((Ticks(5_000), Ticks(2_000))));
+        assert_eq!(cue(4_000, 9_000), Some((Ticks(5_000), Ticks(4_000))));
+        assert_eq!(cue(4_000, 500), None);
+        assert_eq!(cue(5_000, 500), None);
+    }
 
     fn ms() -> Timebase {
         Timebase::MILLIS

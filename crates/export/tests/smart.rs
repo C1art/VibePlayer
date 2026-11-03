@@ -202,3 +202,20 @@ fn smart_cut_refuses_codecs_it_cannot_encode() {
         "{result:?}"
     );
 }
+
+#[test]
+#[ignore]
+fn a_subtitle_showing_at_the_start_is_kept_from_zero() {
+    // The fixture's second cue runs from 2.0 s to 3.0 s.
+    let (output, _) = smart_cut("multi_audio.mkv", 2.5, 3.5, "subtitle_lead_in.mkv");
+    let mut demuxer = Demuxer::open(&output).unwrap();
+    let stream = demuxer.best_stream(StreamKind::Subtitle).unwrap();
+    let timebase = demuxer.timebase(stream).unwrap();
+    demuxer.select_streams(&[stream]);
+    let mut packet = media::Packet::new().unwrap();
+    assert!(demuxer.read(&mut packet).unwrap());
+    let millis = |ticks: Ticks| ticks.rescale(timebase, Timebase::MILLIS).0;
+    assert_eq!(millis(packet.pts().unwrap()), 0);
+    // About half a second is left; the cut starts on the frame at or after 2.5 s.
+    assert!((450..=550).contains(&millis(packet.duration())));
+}

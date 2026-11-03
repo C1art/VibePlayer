@@ -4,10 +4,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use cut::{CutPlan, StreamIndex, Ticks, Timebase};
 use media::{
     AudioDecoder, AudioEffects, AudioEncoder, Chapter, Decibels, Demuxer, Equalizer, Muxer, Packet,
-    StreamKind,
+    StreamDetails, StreamInfo, StreamKind,
 };
 
 use crate::ExportError;
+use crate::lead_in::{self, SubtitleOutput};
 use crate::smart::SmartHead;
 
 /// Audio edits that force audio, and only audio, to be re-encoded.
@@ -34,6 +35,11 @@ enum Output {
         output_timebase: Timebase,
     },
     Encode(Box<Reencode>),
+    /// Cover art: one packet with no place on the timeline, kept whatever the cut.
+    Picture {
+        index: StreamIndex,
+        written: bool,
+    },
 }
 
 struct Reencode {
@@ -80,6 +86,7 @@ pub(crate) fn remux(
             let effects = AudioEffects {
                 gain: audio.gain,
                 equalizer: audio.equalizer,
+                trim: Some(plan.range_in(Timebase::MICROS)),
                 ..AudioEffects::default()
             };
             let decoder = AudioDecoder::new(params, encoder.target(), effects)?;
@@ -95,6 +102,10 @@ pub(crate) fn remux(
             })))
         } else {
             match muxer.add_copied_stream(&demuxer, stream.index) {
+                Ok(index) if is_attached_picture(stream) => Some(Output::Picture {
+                    index,
+                    written: false,
+                }),
                 Ok(index) => Some(Output::Copy {
                     index,
                     input_timebase,
@@ -117,6 +128,7 @@ pub(crate) fn remux(
                 output_timebase,
                 ..
             } => *output_timebase = muxer.timebase(*index).unwrap_or(*output_timebase),
+            Output::Picture { .. } => {}
             Output::Encode(reencode) => {
                 reencode.output_timebase = muxer
                     .timebase(reencode.index)
@@ -145,6 +157,25 @@ pub(crate) fn remux(
         _ => None,
     };
     let mut reencoded_frames = 0;
+    let subtitles: Vec<SubtitleOutput> = info
+        .streams
+        .iter()
+        .filter(|stream| stream.kind == StreamKind::Subtitle)
+        .filter_map(|stream| match outputs.get(stream.index.0) {
+            Some(Some(Output::Copy {
+                index,
+                input_timebase,
+                output_timebase,
+            })) => Some(SubtitleOutput {
+                input: stream.index,
+                output: *index,
+                input_timebase: *input_timebase,
+                output_timebase: *output_timebase,
+            }),
+            _ => None,
+        })
+        .collect();
+    lead_in::write_cues_on_screen(source, plan, &subtitles, &mut muxer)?;
     let decode_from = plan.reencode.map_or(plan.start, |head| head.decode_from);
     demuxer.seek_stream(plan.stream, decode_from)?;
 
@@ -153,7 +184,7 @@ pub(crate) fn remux(
     let needs_finish: Vec<bool> = info
         .streams
         .iter()
-        .map(|s| matches!(s.kind, StreamKind::Video | StreamKind::Audio))
+        .map(|s| matches!(s.kind, StreamKind::Video | StreamKind::Audio) && !is_attached_picture(s))
         .collect();
     while demuxer.read(&mut packet)? {
         if cancel.load(Ordering::Relaxed) {
@@ -204,6 +235,16 @@ pub(crate) fn remux(
                     muxer.write(&mut packet)?;
                 }
             }
+            Output::Picture { index, written } => {
+                if !*written {
+                    *written = true;
+                    packet.set_timestamps(Some(Ticks::ZERO), Some(Ticks::ZERO));
+                    packet.set_duration(Ticks::ZERO);
+                    packet.set_stream_index(*index);
+                    packet.clear_position();
+                    muxer.write(&mut packet)?;
+                }
+            }
             Output::Encode(reencode) => {
                 let timebase = reencode.input_timebase;
                 let Some(pts) = packet.pts() else {
@@ -249,7 +290,7 @@ pub(crate) fn remux(
     })
 }
 
-fn restamp(
+pub(crate) fn restamp(
     packet: &mut Packet,
     plan: &CutPlan,
     input: Timebase,
@@ -266,13 +307,17 @@ fn restamp(
     packet.clear_position();
 }
 
+fn is_attached_picture(stream: &StreamInfo) -> bool {
+    matches!(&stream.details, StreamDetails::Video(video) if video.attached_picture)
+}
+
 fn fraction_done(plan: &CutPlan, pts: Ticks) -> Option<f32> {
     let total = plan.duration().0;
     (total > 0).then(|| ((pts - plan.start).0 as f32 / total as f32).clamp(0.0, 1.0))
 }
 
 impl Reencode {
-    /// Decodes a packet (or drains with `None`), trims to the cut by sample time, and encodes.
+    /// Decodes a packet (or drains with `None`) and encodes what the decoder's trim keeps.
     fn feed(
         &mut self,
         packet: Option<&Packet>,

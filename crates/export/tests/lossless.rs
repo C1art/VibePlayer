@@ -113,6 +113,25 @@ fn every_stream_survives_the_cut() {
 
 #[test]
 #[ignore]
+fn cover_art_survives_a_cut_that_starts_later() {
+    let source = fixture("cover_art.mp4");
+    let out = output("cover_art.mp4");
+    export(
+        &source,
+        &out,
+        plan(&source, 1.0, 1.8),
+        AudioChanges::default(),
+    )
+    .unwrap();
+    let info = media::probe(&out).unwrap();
+    let pictures = info.streams.iter().filter(|stream| {
+        matches!(&stream.details, media::StreamDetails::Video(video) if video.attached_picture)
+    });
+    assert_eq!(pictures.count(), 1);
+}
+
+#[test]
+#[ignore]
 fn volume_changes_reencode_only_the_audio() {
     let source = fixture("h264_bframes.mp4");
     let out = output("louder.mp4");
@@ -130,6 +149,48 @@ fn volume_changes_reencode_only_the_audio() {
         info.streams_of(StreamKind::Audio).next().unwrap().codec,
         "aac"
     );
+}
+
+#[test]
+#[ignore]
+fn reencoded_audio_is_cut_to_the_sample() {
+    let source = fixture("h264_bframes.mp4");
+    let out = output("trimmed_audio.mp4");
+    let changes = AudioChanges {
+        gain: Decibels(-30),
+        ..AudioChanges::default()
+    };
+    export(&source, &out, plan(&source, 1.0, 3.0), changes).unwrap();
+    let samples = decoded_audio_samples(&out);
+    // Two seconds at 48 kHz; AAC can't end mid-frame, so allow the padding of one frame.
+    assert!((96_000..96_000 + 1_024).contains(&samples), "{samples}");
+}
+
+fn decoded_audio_samples(path: &Path) -> u64 {
+    let mut demuxer = Demuxer::open(path).unwrap();
+    let stream = demuxer.best_stream(StreamKind::Audio).unwrap();
+    demuxer.select_streams(&[stream]);
+    let target = media::AudioTarget {
+        sample_format: "flt".into(),
+        sample_rate: 48_000,
+        layout: "mono".into(),
+        frame_size: None,
+    };
+    let params = demuxer.stream_params(stream).unwrap();
+    let mut decoder =
+        media::AudioDecoder::new(params, target, media::AudioEffects::default()).unwrap();
+    let mut packet = Packet::new().unwrap();
+    let mut samples = 0;
+    loop {
+        let more = demuxer.read(&mut packet).unwrap();
+        decoder.send(more.then_some(&packet)).unwrap();
+        while let Some(frame) = decoder.receive().unwrap() {
+            samples += frame.samples().len() as u64;
+        }
+        if !more {
+            return samples;
+        }
+    }
 }
 
 #[test]

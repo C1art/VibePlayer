@@ -92,6 +92,9 @@ pub struct AudioEffects {
     /// Fixed gain for export; playback volume is applied live by the output instead.
     pub gain: Decibels,
     pub equalizer: Equalizer,
+    /// For export: keeps only the samples from the first to the second time (absolute
+    /// microseconds), cutting inside frames where they fall.
+    pub trim: Option<(Ticks, Ticks)>,
 }
 
 impl Default for AudioEffects {
@@ -100,6 +103,7 @@ impl Default for AudioEffects {
             speed: Speed::NORMAL,
             gain: Decibels(0),
             equalizer: Equalizer::default(),
+            trim: None,
         }
     }
 }
@@ -326,7 +330,17 @@ impl AudioDecoder {
             timebase.num(),
             timebase.den()
         );
-        let mut description = self.effects.speed.atempo_chain();
+        let mut description = String::new();
+        if let Some((start, end)) = self.effects.trim {
+            // In the source's timebase, before anything restamps the samples.
+            let _ = write!(
+                description,
+                "atrim=start_pts={}:end_pts={},",
+                start.rescale(Timebase::MICROS, timebase).0,
+                end.rescale(Timebase::MICROS, timebase).0
+            );
+        }
+        description.push_str(&self.effects.speed.atempo_chain());
         description.push_str(&self.effects.equalizer.filters());
         if self.effects.gain.0 != 0 {
             let _ = write!(

@@ -1,13 +1,13 @@
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use crossbeam::channel::{self, Receiver};
 
-use crate::check::agent;
+use crate::check::{Patience, agent};
 use crate::{Asset, UpdateError};
 
 pub enum DownloadState {
@@ -76,15 +76,27 @@ fn fetch(
         .ok_or(UpdateError::NoInstaller)?;
     let path = std::env::temp_dir().join(file_name);
     let partial = path.with_extension("partial");
-    let response = agent().get(&asset.url).call()?;
+    let downloaded = download_to(&partial, asset, cancel, progress)
+        .and_then(|()| std::fs::rename(&partial, &path).map_err(UpdateError::Io));
+    if downloaded.is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+    downloaded.map(|()| path)
+}
+
+fn download_to(
+    partial: &Path,
+    asset: &Asset,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(u64),
+) -> Result<(), UpdateError> {
+    let response = agent(Patience::Download).get(&asset.url).call()?;
     let mut reader = response.into_body().into_reader();
-    let mut file = File::create(&partial)?;
+    let mut file = File::create(partial)?;
     let mut buffer = vec![0; 64 * 1024];
     let mut received = 0u64;
     loop {
         if cancel.load(Ordering::Relaxed) {
-            drop(file);
-            let _ = std::fs::remove_file(&partial);
             return Err(UpdateError::Cancelled);
         }
         let read = reader.read(&mut buffer)?;
@@ -96,14 +108,11 @@ fn fetch(
         progress(received);
     }
     file.flush()?;
-    drop(file);
     if asset.size > 0 && received != asset.size {
-        let _ = std::fs::remove_file(&partial);
         return Err(UpdateError::BadResponse(format!(
             "downloaded {received} of {} bytes",
             asset.size
         )));
     }
-    std::fs::rename(&partial, &path)?;
-    Ok(path)
+    Ok(())
 }

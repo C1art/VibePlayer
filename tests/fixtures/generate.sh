@@ -53,6 +53,13 @@ ff -f lavfi -i "$video:duration=2" \
 ff -f lavfi -i "color=c=red:size=160x90:rate=25:duration=0.12" -c:v rawvideo -pix_fmt nv12 red_nv12.mkv
 ff -f lavfi -i "color=c=red:size=160x90:rate=25:duration=0.12" -c:v rawvideo -pix_fmt yuv420p red_yuv420p.mkv
 
+# Cover art: an attached PNG picture next to the video, as downloaded videos often have.
+ff -f lavfi -i "color=c=blue:size=64x64" -frames:v 1 cover.png
+ff -f lavfi -i "$video:duration=2" -i cover.png -map 0 -map 1 \
+  -c:v:0 libx264 -preset veryfast -crf 32 -g 25 -pix_fmt yuv420p -c:v:1 png -disposition:v:1 attached_pic \
+  cover_art.mp4
+rm cover.png
+
 # Truncated: the general fixture cut off partway through its media data.
 head -c 40000 h264_bframes.mp4 > truncated.mp4
 
