@@ -32,6 +32,7 @@ pub struct VibePlayerApp {
     native_window: Option<crate::os::NativeWindow>,
     pub(crate) settings: Settings,
     pub(crate) history: History,
+    pub(crate) recent_posters: crate::recent_posters::RecentPosters,
     pub(crate) session: Option<Session>,
     pub(crate) error: Option<String>,
     pub(crate) osd: Osd,
@@ -82,6 +83,7 @@ impl VibePlayerApp {
             window,
             native_window,
             history,
+            recent_posters: Default::default(),
             session: None,
             error: None,
             osd: Osd::default(),
@@ -364,9 +366,15 @@ impl eframe::App for VibePlayerApp {
         ui.painter().rect_filled(area, 0.0, Color32::BLACK);
         let over_controls = match &mut self.session {
             None => {
+                self.recent_posters.poll(&ctx);
+                let history = &self.history;
+                let posters = &mut self.recent_posters;
+                let mut poster =
+                    |path: &std::path::Path| posters.get(path, history.resume_position(path));
                 welcome::show(
                     ui,
-                    &self.history.recents,
+                    &history.recents,
+                    &mut poster,
                     self.error.as_deref(),
                     &mut actions,
                 );

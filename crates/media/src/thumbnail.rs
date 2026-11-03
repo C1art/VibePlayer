@@ -58,6 +58,11 @@ impl ThumbnailExtractor {
         })
     }
 
+    /// The file's duration in microseconds, if the container says.
+    pub fn duration(&self) -> Option<Ticks> {
+        self.demuxer.input().duration()
+    }
+
     /// The keyframe at or before `at` (microseconds from the start of the file), scaled to fit
     /// the maximum width at the picture's display aspect, then turned upright.
     pub fn extract(&mut self, at: Ticks) -> Result<Option<RgbaImage>, MediaError> {

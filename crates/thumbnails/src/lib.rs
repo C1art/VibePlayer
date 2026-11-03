@@ -1,6 +1,7 @@
-//! Background seek-bar previews with a bounded cache.
+//! Background seek-bar previews with a bounded cache, and stills for the recent list.
 
 mod cache;
+mod posters;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,6 +12,7 @@ use cut::Ticks;
 use media::{RgbaImage, ThumbnailExtractor};
 
 pub use cache::BoundedCache;
+pub use posters::Posters;
 
 const THUMBNAIL_WIDTH: u32 = 192;
 const CACHE_ENTRIES: usize = 160;

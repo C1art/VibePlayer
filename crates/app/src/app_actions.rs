@@ -36,6 +36,7 @@ impl VibePlayerApp {
             }
             Action::ClearRecents => {
                 self.history.clear_watch_history();
+                self.recent_posters.clear();
                 self.save_history();
             }
             Action::ToggleFullscreen => {
