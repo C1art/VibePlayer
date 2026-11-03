@@ -107,6 +107,16 @@ pub fn show(
                     "Releases",
                     format!("https://github.com/{}/releases", update::REPOSITORY),
                 );
+                if let Some(log) = library::log::path() {
+                    ui.label(RichText::new("·").color(theme::TEXT_DIM));
+                    if ui
+                        .link("Log file")
+                        .on_hover_text("Shows the diagnostic log, for reporting a problem")
+                        .clicked()
+                    {
+                        crate::os::show_in_folder(log);
+                    }
+                }
             });
         });
     changed

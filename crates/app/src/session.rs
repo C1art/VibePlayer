@@ -6,6 +6,7 @@ use eframe::egui::{self, TextureHandle};
 use playback::{LoadState, Player, PlayerOptions};
 use thumbnails::{BoundedCache, Bucket, Thumbnails};
 
+use crate::diagnostics::PlaybackLog;
 use crate::seek_bar;
 
 const THUMBNAIL_TEXTURES: usize = 48;
@@ -16,6 +17,7 @@ pub struct Session {
     thumbnails: Option<Thumbnails>,
     textures: BoundedCache<Bucket, TextureHandle>,
     pub title_shown: bool,
+    pub log: PlaybackLog,
 }
 
 impl Session {
@@ -25,6 +27,7 @@ impl Session {
             thumbnails: None,
             textures: BoundedCache::new(THUMBNAIL_TEXTURES),
             title_shown: false,
+            log: PlaybackLog::default(),
         }
     }
 

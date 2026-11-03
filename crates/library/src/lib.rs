@@ -3,6 +3,7 @@
 
 mod error;
 mod history;
+pub mod log;
 mod saver;
 mod settings;
 mod store;

@@ -5,6 +5,7 @@ mod actions;
 mod app;
 mod app_actions;
 mod controls;
+mod diagnostics;
 mod editor;
 mod editor_actions;
 mod icons;
@@ -43,6 +44,10 @@ fn main() -> eframe::Result {
         os::single_instance::Claim::Primary(listener) => listener,
     };
     let store = library::Store::open_default().ok();
+    if let Some(store) = &store {
+        library::log::start(store.dir());
+    }
+    diagnostics::install_panic_hook();
     let settings = store
         .as_ref()
         .map(library::Store::load_settings)

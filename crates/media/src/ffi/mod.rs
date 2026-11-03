@@ -29,6 +29,12 @@ pub use subtitle::RawSubtitleRect;
 
 /// Lowers FFmpeg's own logging (errors only in debug builds, nothing in release); problems
 /// are reported through our own types.
+/// The FFmpeg build's version string, e.g. `n8.1`.
+pub fn version() -> String {
+    // SAFETY: av_version_info returns a static NUL-terminated string.
+    unsafe { string_from(sys::av_version_info()) }.unwrap_or_default()
+}
+
 pub fn quiet_logging() {
     let level = if cfg!(debug_assertions) {
         sys::AV_LOG_ERROR

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use cut::{CutPlan, StreamIndex, Ticks, Timebase, TrimRequest};
 use eframe::egui;
 use export::{AudioChanges, ExportJob, ExportRequest, ExportResult};
-use library::{CutSession, EditorPreferences};
+use library::{CutSession, EditorPreferences, log};
 use media::{Decibels, Equalizer, MediaInfo, StreamKind};
 
 use crate::os::PendingDialog;
@@ -279,6 +279,20 @@ impl Editor {
             }
         };
         self.result = None;
+        log::info(format!(
+            "exporting {} to {}: ticks {}..{} of stream {}, smart cut {}, audio {}",
+            self.source.display(),
+            output.display(),
+            plan.start.0,
+            plan.end.0,
+            plan.stream.0,
+            plan.reencode.map_or(0, |head| head.frames),
+            if self.audio_changes().is_none() {
+                "copied"
+            } else {
+                "re-encoded"
+            }
+        ));
         self.export = Some(ExportJob::start(ExportRequest {
             source: self.source.clone(),
             output,
@@ -322,6 +336,15 @@ impl Editor {
         if let Some(job) = &mut self.export {
             changed = true;
             if let Some(result) = job.poll() {
+                match &result {
+                    Ok(done) => log::info(format!(
+                        "exported {}: {:.2} s, {} frames re-encoded",
+                        done.output.display(),
+                        done.duration.0 as f64 / 1e6,
+                        done.reencoded_frames
+                    )),
+                    Err(error) => log::error(format!("export failed: {error}")),
+                }
                 self.export = None;
                 self.result = Some(result.map_err(|error| error.to_string()));
             }

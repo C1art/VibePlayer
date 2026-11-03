@@ -42,6 +42,11 @@ pub fn init() {
     INIT.call_once(ffi::quiet_logging);
 }
 
+/// The FFmpeg build in use, for diagnostics.
+pub fn ffmpeg_version() -> String {
+    ffi::version()
+}
+
 /// Reads a file's streams and metadata.
 pub fn probe(path: &std::path::Path) -> Result<MediaInfo, MediaError> {
     Demuxer::open(path).map(|demuxer| demuxer.info())

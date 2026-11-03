@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use eframe::egui::{self, RichText};
-use library::Settings;
+use library::{Settings, log};
 use update::{Download, Release, UpdateCheck, UpdateError};
 
 use crate::app::unix_now;
@@ -67,6 +67,10 @@ impl Updates {
             self.status = None;
             match result {
                 Ok(release) => {
+                    log::info(format!(
+                        "update check: latest release is {}",
+                        release.version
+                    ));
                     settings.updates.last_check = Some(unix_now());
                     outcome = UpdateOutcome::SettingsChanged;
                     let skipped = if manual {
@@ -80,8 +84,12 @@ impl Updates {
                         self.status = Some("You're on the latest version.".into());
                     }
                 }
-                Err(error) if manual => self.status = Some(describe(&error)),
-                Err(_) => {}
+                Err(error) => {
+                    log::warn(format!("update check failed: {error}"));
+                    if manual {
+                        self.status = Some(describe(&error));
+                    }
+                }
             }
         }
         if let Some(download) = &mut self.download
@@ -89,8 +97,14 @@ impl Updates {
         {
             self.download = None;
             match result.and_then(launch_installer) {
-                Ok(()) => return UpdateOutcome::InstallerLaunched,
-                Err(error) => self.status = Some(describe(&error)),
+                Ok(()) => {
+                    log::info("update downloaded; starting the installer");
+                    return UpdateOutcome::InstallerLaunched;
+                }
+                Err(error) => {
+                    log::error(format!("update failed: {error}"));
+                    self.status = Some(describe(&error));
+                }
             }
         }
         outcome

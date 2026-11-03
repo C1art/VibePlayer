@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use cut::{StreamIndex, Ticks};
 use eframe::egui::{self, Color32, CursorIcon, Rect, Sense};
-use library::{History, Saver, Settings, Store};
+use library::{History, Saver, Settings, Store, log};
 use media::{HardwareDecoding, Speed, VideoOptions};
 use playback::{LoadState, PlayerOptions};
 
@@ -18,7 +18,7 @@ use crate::osd::Osd;
 use crate::session::Session;
 use crate::subtitles::SubtitleOverlay;
 use crate::window_state::WindowTracker;
-use crate::{shortcuts, theme, video_view, welcome};
+use crate::{diagnostics, shortcuts, theme, video_view, welcome};
 
 /// Controls hide after the pointer rests this long during playback.
 const CONTROLS_IDLE: Duration = Duration::from_millis(2200);
@@ -63,6 +63,7 @@ impl VibePlayerApp {
         let window = WindowTracker::new(settings.window);
         let history = store.as_ref().map(Store::load_history).unwrap_or_default();
         let high_bit_depth = creation.wgpu_render_state.as_ref().map(video_view::install);
+        diagnostics::log_startup(creation, high_bit_depth);
         let mut app = VibePlayerApp {
             saver: store.map(Saver::spawn),
             settings,
@@ -172,6 +173,7 @@ impl VibePlayerApp {
             return;
         };
         let update = session.player.update(now);
+        session.log.observe(&session.player);
         if update.frame_changed
             && let (Some(render_state), Some(video)) =
                 (frame.wgpu_render_state(), session.player.current_frame())
@@ -183,6 +185,10 @@ impl VibePlayerApp {
         }
         match session.player.state() {
             LoadState::Failed(error) => {
+                log::error(format!(
+                    "couldn't open {}: {error}",
+                    session.player.path().display()
+                ));
                 self.error = Some(format!("Couldn't open {}: {error}", session.file_name()));
                 self.session = None;
                 if let Some(render_state) = frame.wgpu_render_state() {
@@ -191,8 +197,9 @@ impl VibePlayerApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title("VibePlayer".into()));
                 return;
             }
-            LoadState::Ready(_) if !session.title_shown => {
+            LoadState::Ready(opened) if !session.title_shown => {
                 session.title_shown = true;
+                log::info(format!("opened {}", diagnostics::describe(&opened.info)));
                 // Only files that actually opened belong in Recent.
                 self.history.add_recent(session.player.path(), unix_now());
                 if let Some(saver) = &self.saver {
