@@ -8,6 +8,7 @@ mod waveform;
 use std::path::{Path, PathBuf};
 
 use cut::{CutPlan, StreamIndex, Ticks, Timebase, TrimRequest};
+use eframe::egui;
 use export::{AudioChanges, ExportJob, ExportRequest, ExportResult};
 use library::{CutSession, EditorPreferences};
 use media::{Decibels, Equalizer, MediaInfo, StreamKind};
@@ -34,7 +35,12 @@ pub struct Editor {
     keyframes: KeyframeFinder,
     index: KeyframeIndex,
     waveform: Option<Waveform>,
+    /// The audio track to draw, once the keyframe scan is done with the disk.
+    waveform_pending: Option<StreamIndex>,
+    repaint: egui::Context,
     pub snap_to_keyframes: bool,
+    /// Playing the selection, which stops at the end point.
+    pub previewing: bool,
     pub smart_cut: bool,
     /// Why smart cut can't be used for this file, if it can't.
     pub smart_cut_unavailable: Option<String>,
@@ -51,6 +57,7 @@ impl Editor {
         audio: Option<StreamIndex>,
         session: Option<&CutSession>,
         preferences: &EditorPreferences,
+        repaint: &egui::Context,
     ) -> Option<Editor> {
         let primary = info
             .video()
@@ -68,10 +75,13 @@ impl Editor {
             end: duration,
             gain: Decibels(0),
             equalizer: Equalizer::default(),
-            keyframes: KeyframeFinder::new(info.path.clone(), primary.index),
-            index: KeyframeIndex::new(info.path.clone(), primary.index),
-            waveform: audio.map(|stream| Waveform::new(info.path.clone(), stream, duration)),
+            keyframes: KeyframeFinder::new(info.path.clone(), primary.index, repaint.clone()),
+            index: KeyframeIndex::new(info.path.clone(), primary.index, repaint.clone()),
+            waveform: None,
+            waveform_pending: audio,
+            repaint: repaint.clone(),
             snap_to_keyframes: preferences.snap_to_keyframes,
+            previewing: false,
             smart_cut: preferences.smart_cut,
             smart_cut_unavailable: export::smart_cut_support(info, primary.index).err(),
             export: None,
@@ -136,7 +146,7 @@ impl Editor {
     }
 
     pub fn waveform_complete(&self) -> bool {
-        self.waveform.as_ref().is_none_or(Waveform::is_complete)
+        self.waveform_pending.is_none() && self.waveform.as_ref().is_none_or(Waveform::is_complete)
     }
 
     pub fn keyframes_complete(&self) -> bool {
@@ -146,7 +156,9 @@ impl Editor {
     /// Moves the start, snapping to the nearest keyframe when snapping is on.
     pub fn set_start(&mut self, position: Ticks) {
         let position = if self.snap_to_keyframes {
-            keyframes::nearest(self.index.keyframes(), self.to_stream(position))
+            let target = self.to_stream(position);
+            let end = self.to_stream(self.end);
+            keyframes::snap_start(self.index.keyframes(), target, end)
                 .map_or(position, |k| self.to_position(k))
         } else {
             position
@@ -216,6 +228,10 @@ impl Editor {
         self.to_position(plan.start)
     }
 
+    pub fn source(&self) -> &std::path::Path {
+        &self.source
+    }
+
     pub fn session(&self, now: u64) -> CutSession {
         CutSession {
             path: self.source.clone(),
@@ -242,10 +258,11 @@ impl Editor {
 
     /// Asks where to save, or picks a free name next to the source if there's no dialog.
     pub fn begin_export(&mut self) {
-        let suggested = export::unique_path(&export::suggested_output(&self.source), Path::exists);
+        // The dialog's thread picks a free name; checking the disk here could stall the UI.
+        let suggested = export::suggested_output(&self.source);
         match crate::os::save_file_dialog(&suggested) {
             Some(dialog) => self.save_dialog = Some(dialog),
-            None => self.export_to(suggested),
+            None => self.export_to(export::unique_path(&suggested, Path::exists)),
         }
     }
 
@@ -279,6 +296,17 @@ impl Editor {
     /// Advances the save dialog and the running export. Returns whether anything changed.
     pub fn poll(&mut self) -> bool {
         let mut changed = self.index.poll();
+        // One scan at a time: on a hard disk two would make each other seek.
+        if self.index.is_complete()
+            && let Some(stream) = self.waveform_pending.take()
+        {
+            self.waveform = Some(Waveform::new(
+                self.source.clone(),
+                stream,
+                self.duration,
+                self.repaint.clone(),
+            ));
+        }
         if let Some(waveform) = &mut self.waveform {
             changed |= waveform.poll();
         }

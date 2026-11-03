@@ -133,6 +133,10 @@ impl VideoRenderer {
         if layout.bits > 8 && !self.high_bit_depth {
             return;
         }
+        let limit = device.limits().max_texture_dimension_2d;
+        if frame.width() > limit || frame.height() > limit {
+            return;
+        }
         let key = (frame.width(), frame.height(), layout);
         if self.planes.as_ref().is_none_or(|planes| planes.key != key) {
             self.planes = Some(self.create_planes(device, key));

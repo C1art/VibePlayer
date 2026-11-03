@@ -40,6 +40,7 @@ pub struct ExportJob {
     progress: Receiver<Progress>,
     cancel: Arc<AtomicBool>,
     fraction: f32,
+    worker: Option<thread::JoinHandle<()>>,
 }
 
 impl ExportJob {
@@ -57,13 +58,18 @@ impl ExportJob {
                 let _ = sender.send(Progress::Done(result));
             }
         });
-        if let Err(error) = spawned {
-            let _ = sender.send(Progress::Done(Err(ExportError::Io(error))));
-        }
+        let worker = match spawned {
+            Ok(worker) => Some(worker),
+            Err(error) => {
+                let _ = sender.send(Progress::Done(Err(ExportError::Io(error))));
+                None
+            }
+        };
         ExportJob {
             progress,
             cancel,
             fraction: 0.0,
+            worker,
         }
     }
 
@@ -84,6 +90,17 @@ impl ExportJob {
 
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Dropping a running job cancels it and waits for the worker to remove its temp file, which
+/// takes no longer than one packet.
+impl Drop for ExportJob {
+    fn drop(&mut self) {
+        self.cancel();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
     }
 }
 

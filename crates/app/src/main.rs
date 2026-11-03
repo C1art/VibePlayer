@@ -32,7 +32,11 @@ use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetup, WgpuSetupCreateNew};
 use eframe::wgpu;
 
 fn main() -> eframe::Result {
-    let initial_file = std::env::args_os().nth(1).map(PathBuf::from);
+    // Absolute, so a running instance with another working directory can open it.
+    let initial_file = std::env::args_os()
+        .nth(1)
+        .map(PathBuf::from)
+        .map(|path| std::path::absolute(&path).unwrap_or(path));
     let listener = match os::single_instance::claim(initial_file.as_deref()) {
         os::single_instance::Claim::Forwarded => return Ok(()),
         os::single_instance::Claim::Primary(listener) => listener,

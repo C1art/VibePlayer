@@ -107,6 +107,7 @@ pub fn open_file_dialog() -> Option<Receiver<Option<PathBuf>>> {
 pub fn save_file_dialog(suggested: &Path) -> Option<Receiver<Option<PathBuf>>> {
     let suggested = suggested.to_path_buf();
     spawn_dialog(move |owner| {
+        let suggested = export::unique_path(&suggested, Path::exists);
         let name = HSTRING::from(suggested.file_name()?.to_string_lossy().as_ref());
         let extension = suggested
             .extension()
@@ -172,17 +173,20 @@ pub struct MediaControls {
     controls: Option<SystemMediaTransportControls>,
     presses: Receiver<Action>,
     sender: Sender<Action>,
+    /// Wakes the UI, which may be idle while paused, when a key is pressed.
+    repaint: eframe::egui::Context,
     shown: Option<(String, bool)>,
     attempted: bool,
 }
 
 impl MediaControls {
-    pub fn new(_creation: &eframe::CreationContext<'_>) -> Option<MediaControls> {
+    pub fn new(creation: &eframe::CreationContext<'_>) -> Option<MediaControls> {
         let (sender, presses) = channel::unbounded();
         Some(MediaControls {
             controls: None,
             presses,
             sender,
+            repaint: creation.egui_ctx.clone(),
             shown: None,
             attempted: false,
         })
@@ -198,6 +202,7 @@ impl MediaControls {
         };
         self.attempted = true;
         let sender = self.sender.clone();
+        let repaint = self.repaint.clone();
         let attached = (|| -> windows::core::Result<SystemMediaTransportControls> {
             let interop = windows::core::factory::<
                 SystemMediaTransportControls,
@@ -226,6 +231,7 @@ impl MediaControls {
                         };
                         if let Some(action) = action {
                             let _ = sender.send(action);
+                            repaint.request_repaint();
                         }
                     }
                     Ok(())
@@ -286,7 +292,7 @@ pub(super) mod single_instance {
     use std::time::Duration;
 
     use windows::Win32::Foundation::{
-        ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, HANDLE,
+        ERROR_ACCESS_DENIED, ERROR_NO_DATA, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, HANDLE,
     };
     use windows::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_INBOUND};
     use windows::Win32::System::Pipes::{
@@ -382,8 +388,11 @@ pub(super) mod single_instance {
             // SAFETY: `current` is a pipe instance we created and still own.
             let ready = match unsafe { ConnectNamedPipe(current, None) } {
                 Ok(()) => true,
-                // The client connected between creating the instance and this call.
-                Err(error) => error.code() == ERROR_PIPE_CONNECTED.to_hresult(),
+                // The client connected between creating the instance and this call, or even
+                // wrote and left already; its request is still waiting in the pipe.
+                Err(error) => [ERROR_PIPE_CONNECTED, ERROR_NO_DATA]
+                    .iter()
+                    .any(|code| error.code() == code.to_hresult()),
             };
             // Open the next instance before reading, so a launch now still finds a listener.
             let next = create_instance(&name, false);

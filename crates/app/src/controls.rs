@@ -104,10 +104,11 @@ pub fn show(
         };
         if let Some(value) = thin_slider(ui, shown_volume, 90.0) {
             let target = (value * 100.0).round() as i32;
-            actions.push(Action::VolumeBy(target - i32::from(state.volume.percent())));
+            // Unmute first: raising the volume would unmute too, and a toggle after it re-mutes.
             if state.muted {
                 actions.push(Action::ToggleMute);
             }
+            actions.push(Action::VolumeBy(target - i32::from(state.volume.percent())));
         }
         ui.add_space(10.0);
         let time = format!(

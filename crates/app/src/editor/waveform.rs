@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam::channel::{self, Receiver, TryRecvError};
 use cut::{StreamIndex, Ticks, Timebase};
+use eframe::egui;
 use media::{AudioDecoder, AudioEffects, AudioTarget, Demuxer, Packet};
 
 /// Columns of loudness across the whole file; more than any screen is wide.
@@ -20,14 +21,22 @@ pub struct Waveform {
 }
 
 impl Waveform {
-    pub fn new(path: PathBuf, stream: StreamIndex, duration: Ticks) -> Waveform {
+    pub fn new(
+        path: PathBuf,
+        stream: StreamIndex,
+        duration: Ticks,
+        repaint: egui::Context,
+    ) -> Waveform {
         let (sender, updates) = channel::unbounded();
         let _ = thread::Builder::new()
             .name("waveform".into())
             .spawn(move || {
                 let _ = scan(&path, stream, duration, |peaks| {
+                    repaint.request_repaint();
                     sender.send(peaks.to_vec()).is_ok()
                 });
+                drop(sender);
+                repaint.request_repaint();
             });
         Waveform {
             updates,
