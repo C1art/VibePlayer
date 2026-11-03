@@ -23,6 +23,7 @@ mod updates;
 mod video_view;
 mod welcome;
 mod widgets;
+mod window_state;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,18 +43,23 @@ fn main() -> eframe::Result {
         os::single_instance::Claim::Primary(listener) => listener,
     };
     let store = library::Store::open_default().ok();
+    let settings = store
+        .as_ref()
+        .map(library::Store::load_settings)
+        .unwrap_or_default();
+    let viewport = egui::ViewportBuilder::default()
+        .with_title("VibePlayer")
+        .with_app_id("VibePlayer")
+        .with_inner_size([1280.0, 760.0])
+        .with_min_inner_size([480.0, 300.0])
+        .with_drag_and_drop(true)
+        .with_icon(Arc::new(egui::IconData {
+            rgba: include_bytes!("../resources/icon-64.rgba").to_vec(),
+            width: 64,
+            height: 64,
+        }));
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("VibePlayer")
-            .with_app_id("VibePlayer")
-            .with_inner_size([1280.0, 760.0])
-            .with_min_inner_size([480.0, 300.0])
-            .with_drag_and_drop(true)
-            .with_icon(Arc::new(egui::IconData {
-                rgba: include_bytes!("../resources/icon-64.rgba").to_vec(),
-                width: 64,
-                height: 64,
-            })),
+        viewport: window_state::restore(viewport, settings.window),
         wgpu_options: wgpu_configuration(),
         ..Default::default()
     };
@@ -65,6 +71,7 @@ fn main() -> eframe::Result {
             Ok(Box::new(app::VibePlayerApp::new(
                 creation,
                 store,
+                settings,
                 initial_file,
                 requests,
             )))

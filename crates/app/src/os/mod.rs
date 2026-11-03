@@ -94,6 +94,21 @@ impl MediaControls {
     }
 }
 
+/// Whether a window whose top-left corner is at `x`, `y` would have its title bar on a
+/// screen. Positions are logical points; screens are compared in pixels, which is at least as
+/// generous.
+pub fn is_on_screen(x: i32, y: i32) -> bool {
+    #[cfg(windows)]
+    {
+        windows::is_on_screen(x, y)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (x, y);
+        true
+    }
+}
+
 /// Opens the file manager with `path` selected. Never blocks.
 pub fn show_in_folder(path: &std::path::Path) {
     #[cfg(windows)]

@@ -17,6 +17,7 @@ use crate::os::{MediaControls, NowPlaying, PendingDialog};
 use crate::osd::Osd;
 use crate::session::Session;
 use crate::subtitles::SubtitleOverlay;
+use crate::window_state::WindowTracker;
 use crate::{shortcuts, theme, video_view, welcome};
 
 /// Controls hide after the pointer rests this long during playback.
@@ -26,6 +27,7 @@ const SCRUB_INTERVAL: Duration = Duration::from_millis(60);
 
 pub struct VibePlayerApp {
     pub(crate) saver: Option<Saver>,
+    window: WindowTracker,
     pub(crate) settings: Settings,
     pub(crate) history: History,
     pub(crate) session: Option<Session>,
@@ -53,16 +55,18 @@ impl VibePlayerApp {
     pub fn new(
         creation: &eframe::CreationContext<'_>,
         store: Option<Store>,
+        settings: Settings,
         initial_file: Option<PathBuf>,
         instance_requests: Option<Receiver<PathBuf>>,
     ) -> VibePlayerApp {
         theme::apply(&creation.egui_ctx);
-        let settings = store.as_ref().map(Store::load_settings).unwrap_or_default();
+        let window = WindowTracker::new(settings.window);
         let history = store.as_ref().map(Store::load_history).unwrap_or_default();
         let high_bit_depth = creation.wgpu_render_state.as_ref().map(video_view::install);
         let mut app = VibePlayerApp {
             saver: store.map(Saver::spawn),
             settings,
+            window,
             history,
             session: None,
             error: None,
@@ -296,6 +300,7 @@ impl eframe::App for VibePlayerApp {
             }
         }
         self.fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+        self.window.observe(&ctx);
         actions.extend(shortcuts::read(
             &ctx,
             i64::from(self.settings.seek_step_seconds),
@@ -374,6 +379,7 @@ impl eframe::App for VibePlayerApp {
     fn on_exit(&mut self) {
         // Dropping the editor cancels a running export and removes its temp file.
         self.close_file();
+        self.settings.window = self.window.placement();
         if let Some(saver) = &self.saver {
             saver.save_settings(&self.settings);
             saver.save_history(&self.history);

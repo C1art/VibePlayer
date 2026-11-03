@@ -16,6 +16,19 @@ pub struct Settings {
     pub seek_step_seconds: u32,
     pub updates: UpdatePreferences,
     pub editor: EditorPreferences,
+    /// Where the window was when the app last closed.
+    pub window: Option<WindowPlacement>,
+}
+
+/// The window's size and position when not maximized, in logical points, and whether it was
+/// maximized.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowPlacement {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub maximized: bool,
 }
 
 impl Default for Settings {
@@ -29,6 +42,7 @@ impl Default for Settings {
             seek_step_seconds: 5,
             updates: UpdatePreferences::default(),
             editor: EditorPreferences::default(),
+            window: None,
         }
     }
 }

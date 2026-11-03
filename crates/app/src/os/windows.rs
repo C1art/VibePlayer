@@ -413,3 +413,22 @@ pub(super) mod single_instance {
         }
     }
 }
+
+pub fn is_on_screen(x: i32, y: i32) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+        SM_YVIRTUALSCREEN,
+    };
+    // SAFETY: GetSystemMetrics only reads system values.
+    let (left, top, width, height) = unsafe {
+        (
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        )
+    };
+    // A point on the title bar, a little in from the corner.
+    let (title_x, title_y) = (x.saturating_add(60), y.saturating_add(12));
+    (left..left + width).contains(&title_x) && (top..top + height).contains(&title_y)
+}
