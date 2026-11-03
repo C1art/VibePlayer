@@ -1,3 +1,5 @@
+NOTE: This project is almost fully "vibecoded", mostly as an experiment inspired by the Adobe reverse engineering projects. If you stumbled across this repo, keep in mind that while I have done my best to ensure that all of the source is safe and stable, and reviewed nearly every line of code in the project, I cannot and will not guarantee anything. Install and/or build at your own risk!
+
 # VibePlayer
 
 A light, fast video player for Windows 11 with a bare-bones lossless trimmer.
