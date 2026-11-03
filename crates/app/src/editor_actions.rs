@@ -103,8 +103,6 @@ impl VibePlayerApp {
                     }
                 }
             }
-            EditorAction::SetStartHere => self.set_trim_point(true),
-            EditorAction::SetEndHere => self.set_trim_point(false),
             EditorAction::Export => {
                 if let Some(editor) = &mut self.editor {
                     editor.begin_export();

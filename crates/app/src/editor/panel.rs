@@ -15,7 +15,7 @@ use crate::widgets::{self, Kind, badge, balance_slider, button, chip, icon_butto
 
 const PADDING: egui::Vec2 = vec2(22.0, 14.0);
 const CARD_GAP: f32 = 12.0;
-const CLIP_WIDTH: f32 = 300.0;
+const CLIP_WIDTH: f32 = 290.0;
 const CUT_WIDTH: f32 = 290.0;
 /// Narrower than this, the audio sliders go two to a row.
 const AUDIO_ONE_ROW_WIDTH: f32 = 470.0;
@@ -40,8 +40,6 @@ pub enum EditorAction {
     Seek(Ticks, SeekMode),
     StepBack,
     StepForward,
-    SetStartHere,
-    SetEndHere,
     StartToKeyframe { forward: bool },
     PreviewSelection,
     AudioChanged,
@@ -279,7 +277,7 @@ fn clip_card(
     let length = format!("Length {}", clock(length));
     card_title(ui, "Clip", Some((&length, theme::TEXT_DIM)));
     egui::Grid::new("trim points")
-        .num_columns(4)
+        .num_columns(3)
         .spacing(vec2(6.0, 6.0))
         .show(ui, |ui| {
             trim_label(ui, "Start");
@@ -307,26 +305,15 @@ fn clip_card(
                     actions.push(EditorAction::StartToKeyframe { forward: true });
                 }
             });
-            if set_button(ui, "I", "Set the start to the playhead (I)").clicked() {
-                actions.push(EditorAction::SetStartHere);
-            }
             ui.end_row();
             trim_label(ui, "End");
             chip(ui, &clock(editor.end));
-            ui.label("");
-            if set_button(ui, "O", "Set the end to the playhead (O)").clicked() {
-                actions.push(EditorAction::SetEndHere);
-            }
             ui.end_row();
         });
 }
 
 fn trim_label(ui: &mut egui::Ui, label: &str) {
     ui.label(RichText::new(label).size(12.5).color(theme::TEXT_DIM));
-}
-
-fn set_button(ui: &mut egui::Ui, key: &str, tooltip: &str) -> egui::Response {
-    button(ui, Kind::Secondary, None, &format!("Set  {key}")).on_hover_text(tooltip)
 }
 
 fn cut_card(ui: &mut egui::Ui, editor: &mut Editor, actions: &mut Vec<EditorAction>) {
