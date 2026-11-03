@@ -20,8 +20,10 @@ pub fn sharing(device: &wgpu::Device) -> Option<GpuSharing> {
         let hal = device.as_hal::<Dx12>()?;
         hal.raw_device().GetAdapterLuid()
     };
+    let p010 = wgpu::Features::TEXTURE_FORMAT_P010 | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM;
     Some(GpuSharing {
         adapter_luid: (i64::from(luid.HighPart) << 32) | i64::from(luid.LowPart),
+        high_bit_depth: device.features().contains(p010),
     })
 }
 

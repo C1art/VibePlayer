@@ -39,6 +39,7 @@ pub struct VibePlayerApp {
     pub(crate) settings_open: bool,
     pub(crate) updates: crate::updates::Updates,
     pub(crate) high_bit_depth: Option<bool>,
+    render_state: Option<eframe::egui_wgpu::RenderState>,
     pub(crate) last_activity: Instant,
     pub(crate) last_scrub: Option<Instant>,
     pending_scrub: Option<Action>,
@@ -83,6 +84,7 @@ impl VibePlayerApp {
             settings_open: false,
             updates: crate::updates::Updates::default(),
             high_bit_depth,
+            render_state: creation.wgpu_render_state.clone(),
             last_activity: Instant::now(),
             last_scrub: None,
             pending_scrub: None,
@@ -147,6 +149,10 @@ impl VibePlayerApp {
     /// Closes the current file, remembering where it stopped.
     pub(crate) fn close_file(&mut self) {
         self.close_editor();
+        // The last picture may hold GPU textures shared with the decoder; let them go now.
+        if let Some(render_state) = &self.render_state {
+            video_view::clear(render_state);
+        }
         if let Some(session) = self.session.take() {
             let player = &session.player;
             if let LoadState::Ready(_) = player.state() {

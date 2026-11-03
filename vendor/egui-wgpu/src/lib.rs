@@ -277,12 +277,20 @@ impl RenderState {
         let target_format = crate::preferred_framebuffer_format(&surface_formats)?;
         // VibePlayer: an extended-range linear (scRGB) half-float surface when HDR is wanted
         // and the surface offers one.
+        // Only while the display is in HDR mode: on an SDR display it would change how egui
+        // blends (in linear light) for nothing. Switching modes takes a restart.
         let hdr_capable = config.high_dynamic_range
             && compatible_surface.is_some_and(|surface| {
-                surface
-                    .get_capabilities(&adapter)
-                    .color_spaces(wgpu::TextureFormat::Rgba16Float)
-                    .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR)
+                let display_is_hdr = surface
+                    .display_hdr_info(&adapter)
+                    .coarse
+                    .and_then(|coarse| coarse.high_dynamic_range)
+                    == Some(true);
+                display_is_hdr
+                    && surface
+                        .get_capabilities(&adapter)
+                        .color_spaces(wgpu::TextureFormat::Rgba16Float)
+                        .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR)
             });
         let (target_format, color_space) = if hdr_capable {
             (

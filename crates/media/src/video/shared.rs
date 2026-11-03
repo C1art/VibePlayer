@@ -49,7 +49,9 @@ impl VideoDecoder {
             },
         };
         let format = pool.format();
-        if format == SurfaceFormat::P010 && !self.options.high_bit_depth {
+        let renderer_takes_p010 =
+            self.options.high_bit_depth && self.options.gpu.is_some_and(|gpu| gpu.high_bit_depth);
+        if format == SurfaceFormat::P010 && !renderer_takes_p010 {
             return Ok(None);
         }
         // Every texture still in use: download this one rather than wait.

@@ -165,8 +165,6 @@ impl VideoRenderer {
             self.show_shared(device, queue, frame);
             return;
         }
-        #[cfg(windows)]
-        self.shared.release(queue);
         let key = (frame.width(), frame.height(), layout);
         if self.planes.as_ref().is_none_or(|planes| planes.key != key) {
             self.planes = Some(self.create_planes(device, key));
@@ -205,6 +203,9 @@ impl VideoRenderer {
                 size,
             );
         }
+        // Only now that this frame is up does the shared picture stop being drawn.
+        #[cfg(windows)]
+        self.shared.release(queue);
         self.showing = Some(planes.bind_group.clone());
         self.write_color(queue, frame);
     }

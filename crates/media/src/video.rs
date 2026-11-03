@@ -201,6 +201,11 @@ impl VideoDecoder {
             ..self.options
         };
         self.codec = open_codec(&self.params, software)?;
+        #[cfg(windows)]
+        {
+            // Software pictures never use the shared textures; let them go.
+            self.sharing = shared::Sharing::default();
+        }
         self.options.hardware = HardwareDecoding::Off;
         self.filter = None;
         self.retiring = None;
@@ -334,6 +339,8 @@ fn open_codec(params: &StreamParams, options: VideoOptions) -> Result<CodecConte
         #[cfg(not(windows))]
         let adapter = None;
         for &device in HwDevice::preferred() {
+            // The index is DXGI's; DXVA2 numbers its adapters differently.
+            let adapter = adapter.filter(|_| device == HwDevice::D3d11va);
             if let Ok(codec) = CodecContext::decoder_on(params, Some(device), adapter)
                 && codec.is_hardware()
             {

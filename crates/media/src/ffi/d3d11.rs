@@ -67,7 +67,20 @@ struct Objects {
     textures: Vec<ID3D11Texture2D>,
     ready: ID3D11Fence,
     done: ID3D11Fence,
-    handles: Vec<HANDLE>,
+    _handles: Handles,
+}
+
+/// Shared NT handles, closed when dropped, so a setup that fails halfway leaks none.
+#[derive(Default)]
+struct Handles(Vec<HANDLE>);
+
+impl Drop for Handles {
+    fn drop(&mut self) {
+        for handle in &self.0 {
+            // SAFETY: each handle was created by CreateSharedHandle and is closed once.
+            let _ = unsafe { CloseHandle(*handle) };
+        }
+    }
 }
 
 // SAFETY: FFmpeg turns on D3D11 multithread protection for the devices it creates, and the
@@ -75,15 +88,6 @@ struct Objects {
 unsafe impl Send for Objects {}
 // SAFETY: as above.
 unsafe impl Sync for Objects {}
-
-impl Drop for Objects {
-    fn drop(&mut self) {
-        for handle in &self.handles {
-            // SAFETY: each handle was created by CreateSharedHandle and is closed once.
-            let _ = unsafe { CloseHandle(*handle) };
-        }
-    }
-}
 
 /// Copies decoded D3D11 pictures into a set of shared textures.
 pub struct SurfacePool {
@@ -177,20 +181,21 @@ impl SurfacePool {
                 SurfaceFormat::Nv12 => DXGI_FORMAT_NV12,
                 SurfaceFormat::P010 => DXGI_FORMAT_P010,
             };
-            let mut handles = Vec::new();
+            let mut handles = Handles::default();
             let mut textures = Vec::new();
             for _ in 0..SLOTS {
                 let texture = shared_texture(&device, width, height, format)?;
                 let resource: IDXGIResource1 = texture.cast().ok()?;
                 let access = DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0;
-                handles.push(
+                handles.0.push(
                     resource
                         .CreateSharedHandle(None, access, PCWSTR::null())
                         .ok()?,
                 );
                 textures.push(texture);
             }
-            let fence = || -> Option<(ID3D11Fence, HANDLE)> {
+            let texture_handles: Vec<isize> = handles.0.iter().map(|h| h.0 as isize).collect();
+            let mut fence = || -> Option<(ID3D11Fence, HANDLE)> {
                 let mut fence: Option<ID3D11Fence> = None;
                 device5
                     .CreateFence(0, D3D11_FENCE_FLAG_SHARED, &mut fence)
@@ -199,19 +204,18 @@ impl SurfacePool {
                 let handle = fence
                     .CreateSharedHandle(None, GENERIC_ALL.0, PCWSTR::null())
                     .ok()?;
+                handles.0.push(handle);
                 Some((fence, handle))
             };
             let (ready, ready_handle) = fence()?;
             let (done, done_handle) = fence()?;
-            let texture_handles: Vec<isize> = handles.iter().map(|h| h.0 as isize).collect();
-            handles.extend([ready_handle, done_handle]);
             let objects = Arc::new(Objects {
                 device,
                 context,
                 textures,
                 ready,
                 done,
-                handles,
+                _handles: handles,
             });
             let surfaces = Arc::new(SharedSurfaces {
                 id: NEXT_SET_ID.fetch_add(1, Ordering::Relaxed),

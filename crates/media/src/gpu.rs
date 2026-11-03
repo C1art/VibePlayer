@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 pub struct GpuSharing {
     /// The renderer's adapter, so decoding happens on the same GPU (Windows LUID).
     pub adapter_luid: i64,
+    /// Whether the renderer can show 10-bit (P010) textures as well as 8-bit (NV12) ones.
+    pub high_bit_depth: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -65,13 +67,16 @@ impl SharedSurfaces {
     #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) fn claim(self: &Arc<Self>, completed: u64) -> Option<SlotLease> {
         self.slots.iter().enumerate().find_map(|(index, slot)| {
-            let finished = slot.done_after.load(Ordering::Acquire) <= completed;
-            (finished
-                && slot
-                    .in_use
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                    .is_ok())
-            .then(|| SlotLease {
+            // Take the slot first, then look at when its last reader is done: the renderer
+            // raises that before letting go, so read the other way round it could be stale.
+            slot.in_use
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .ok()?;
+            if slot.done_after.load(Ordering::Acquire) > completed {
+                slot.in_use.store(false, Ordering::Release);
+                return None;
+            }
+            Some(SlotLease {
                 surfaces: Arc::clone(self),
                 index,
             })

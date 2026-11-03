@@ -112,22 +112,25 @@ impl Painter {
     /// VibePlayer: rereads the display's HDR state now and then (the window can move to
     /// another display, HDR can be switched, the SDR white level changes), and on an scRGB
     /// surface scales egui's output so white matches the system's SDR white. Returns the clear
-    /// color in the surface's encoding.
+    /// color in the surface's encoding, and whether the display's state changed.
     fn follow_display(
         surface_state: &mut SurfaceState,
         render_state: &RenderState,
         clear_color: [f32; 4],
-    ) -> [f32; 4] {
+    ) -> ([f32; 4], bool) {
         if render_state.color_space != wgpu::SurfaceColorSpace::ExtendedSrgbLinear {
-            return clear_color;
+            return (clear_color, false);
         }
         let due = surface_state
             .display_checked
             .is_none_or(|checked| checked.elapsed() >= std::time::Duration::from_secs(1));
+        let mut changed = false;
         if due {
             surface_state.display_checked = Some(web_time::Instant::now());
-            let info = surface_state.surface.display_hdr_info(&render_state.adapter);
-            *render_state.display.write() = Some(info);
+            let info = Some(surface_state.surface.display_hdr_info(&render_state.adapter));
+            let mut display = render_state.display.write();
+            changed = *display != info;
+            *display = info;
         }
         // scRGB 1.0 is 80 nits; SDR content should appear at the user's SDR white level.
         let scale = render_state
@@ -147,7 +150,10 @@ impl Painter {
             }
         };
         let [r, g, b, a] = clear_color;
-        [linear(r) * scale, linear(g) * scale, linear(b) * scale, a]
+        (
+            [linear(r) * scale, linear(g) * scale, linear(b) * scale, a],
+            changed,
+        )
     }
 
     fn configure_surface(
@@ -595,6 +601,13 @@ impl Painter {
         let Some(surface_state) = self.surfaces.get_mut(&viewport_id) else {
             return vsync_sec;
         };
+        // VibePlayer: before egui's uniforms are written, so this frame uses the new scale.
+        let (clear_color, display_changed) =
+            Self::follow_display(surface_state, render_state, clear_color);
+        if display_changed {
+            // The video follows on the next frame; make sure there is one even when idle.
+            self.context.request_repaint_of(viewport_id);
+        }
 
         let mut encoder =
             render_state
@@ -636,7 +649,6 @@ impl Painter {
             Self::configure_surface(surface_state, render_state, &self.config.surface);
             surface_state.needs_reconfigure = false;
         }
-        let clear_color = Self::follow_display(surface_state, render_state, clear_color);
 
         let output_frame = {
             profiling::scope!("get_current_texture");
