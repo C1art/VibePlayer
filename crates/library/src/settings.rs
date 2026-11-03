@@ -15,6 +15,8 @@ pub struct Settings {
     pub gpu_frames: bool,
     /// Present HDR video above SDR white on HDR displays; takes effect at the next launch.
     pub hdr_output: bool,
+    /// The accent color of the interface and the app icon.
+    pub theme: ColorTheme,
     pub resume_playback: bool,
     /// Seconds jumped by the arrow keys.
     pub seek_step_seconds: u32,
@@ -44,6 +46,7 @@ impl Default for Settings {
             hardware_decoding: true,
             gpu_frames: true,
             hdr_output: true,
+            theme: ColorTheme::default(),
             resume_playback: true,
             seek_step_seconds: 5,
             updates: UpdatePreferences::default(),
@@ -51,6 +54,32 @@ impl Default for Settings {
             window: None,
         }
     }
+}
+
+/// The interface's accent color, which the app icon follows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ColorTheme {
+    #[default]
+    Teal,
+    Ocean,
+    Mint,
+    Amber,
+    Coral,
+    Purple,
+    Graphite,
+}
+
+impl ColorTheme {
+    pub const ALL: [ColorTheme; 7] = [
+        ColorTheme::Teal,
+        ColorTheme::Ocean,
+        ColorTheme::Mint,
+        ColorTheme::Amber,
+        ColorTheme::Coral,
+        ColorTheme::Purple,
+        ColorTheme::Graphite,
+    ];
 }
 
 /// Trim editor choices that carry over between files.

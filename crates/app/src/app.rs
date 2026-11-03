@@ -29,6 +29,7 @@ const SCRUB_INTERVAL: Duration = Duration::from_millis(60);
 pub struct VibePlayerApp {
     pub(crate) saver: Option<Saver>,
     window: WindowTracker,
+    native_window: Option<crate::os::NativeWindow>,
     pub(crate) settings: Settings,
     pub(crate) history: History,
     pub(crate) session: Option<Session>,
@@ -64,10 +65,14 @@ impl VibePlayerApp {
         initial_file: Option<PathBuf>,
         instance_requests: Option<Receiver<PathBuf>>,
     ) -> VibePlayerApp {
-        theme::apply(&creation.egui_ctx);
+        theme::apply(&creation.egui_ctx, settings.theme);
         let native_window = crate::os::NativeWindow::of(creation);
         crate::window_state::place(native_window, settings.window, &creation.egui_ctx);
         let window = WindowTracker::new(native_window, settings.window);
+        if let Some(native_window) = native_window {
+            // The taskbar shows the window's large icon, which only the exe's resources give.
+            crate::os::show_app_icon(native_window, settings.theme);
+        }
         let history = store.as_ref().map(Store::load_history).unwrap_or_default();
         let high_bit_depth = creation.wgpu_render_state.as_ref().map(video_view::install);
         diagnostics::log_startup(creation, high_bit_depth);
@@ -75,6 +80,7 @@ impl VibePlayerApp {
             saver: store.map(Saver::spawn),
             settings,
             window,
+            native_window,
             history,
             session: None,
             error: None,
@@ -177,6 +183,17 @@ impl VibePlayerApp {
     pub(crate) fn save_history(&self) {
         if let Some(saver) = &self.saver {
             saver.save_history(&self.history);
+        }
+    }
+
+    /// Recolors the interface and the app icon: the window's, and on Windows the icon the
+    /// shell shows for shortcuts and VibePlayer's videos.
+    fn apply_theme(&self, ctx: &egui::Context) {
+        let theme = self.settings.theme;
+        theme::apply(ctx, theme);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(theme::icon(theme))));
+        if let Some(window) = self.native_window {
+            crate::os::show_app_icon(window, theme);
         }
     }
 
@@ -362,12 +379,16 @@ impl eframe::App for VibePlayerApp {
         }
         let mut settings_changed = false;
         if self.settings_open {
+            let theme = self.settings.theme;
             settings_changed |= crate::settings_window::show(
                 &ctx,
                 &mut self.settings_open,
                 &mut self.settings,
                 &mut self.updates,
             );
+            if self.settings.theme != theme {
+                self.apply_theme(&ctx);
+            }
         }
         self.updates.tick(&self.settings);
         let exporting = self.editor.as_ref().is_some_and(Editor::is_exporting);
@@ -605,7 +626,7 @@ fn paint_audio_only(ui: &egui::Ui, area: Rect, name: &str) {
             egui::vec2(52.0, 52.0),
         ),
         crate::icons::Icon::Volume,
-        theme::ACCENT_SOFT,
+        theme::accent_soft(),
     );
     painter.text(
         area.center() + egui::vec2(0.0, 52.0),

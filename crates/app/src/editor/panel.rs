@@ -87,7 +87,7 @@ pub fn show(
     ui.horizontal(|ui| {
         ui.label(RichText::new("Trim").size(17.0).strong());
         if reencoded_until.is_some() {
-            badge(ui, "Smart cut", theme::SMART);
+            badge(ui, "Smart cut", theme::smart());
         } else {
             badge(ui, "Lossless", theme::SUCCESS);
         }
@@ -302,7 +302,7 @@ fn status(
                 };
                 Status {
                     text,
-                    color: theme::SMART,
+                    color: theme::smart(),
                 }
             }
             _ if plan.start_shift() < Ticks::ZERO => Status {
@@ -312,7 +312,7 @@ fn status(
                     clock(editor.plan_start_position(plan)),
                     seconds(Ticks(-plan.start_shift().0).rescale(plan.timebase, Timebase::MICROS))
                 ),
-                color: theme::KEYFRAME,
+                color: theme::keyframe(),
             },
             _ if plan.start_shift() > Ticks::ZERO => {
                 let shift = plan.start_shift().rescale(plan.timebase, Timebase::MICROS);
@@ -322,7 +322,7 @@ fn status(
                         clock(editor.plan_start_position(plan)),
                         seconds(shift)
                     ),
-                    color: theme::KEYFRAME,
+                    color: theme::keyframe(),
                 }
             }
             _ => Status {

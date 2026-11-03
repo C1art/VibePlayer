@@ -25,11 +25,11 @@ pub fn show(
         ui.with_layout(Layout::top_down(Align::Center), |ui| {
             ui.add_space((area.height() * 0.2).max(24.0));
             let (logo, _) = ui.allocate_exact_size(vec2(64.0, 64.0), Sense::hover());
-            ui.painter().rect_filled(logo, 16.0, theme::ACCENT);
-            icons::paint(
-                ui.painter(),
-                logo.shrink(16.0),
-                Icon::Play,
+            let icon = theme::icon_texture(ui.ctx());
+            ui.painter().image(
+                icon.id(),
+                logo,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 egui::Color32::WHITE,
             );
             ui.add_space(10.0);
@@ -86,7 +86,7 @@ fn recent_row(ui: &mut egui::Ui, recent: &RecentFile) -> egui::Response {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let icon = egui::Rect::from_center_size(rect.left_center() + vec2(20.0, 0.0), vec2(16.0, 16.0));
-    icons::paint(ui.painter(), icon, Icon::Play, theme::ACCENT_SOFT);
+    icons::paint(ui.painter(), icon, Icon::Play, theme::accent_soft());
     let painter = ui.painter_at(rect.shrink2(vec2(40.0, 0.0)).with_min_x(rect.left() + 40.0));
     painter.text(
         rect.left_top() + vec2(40.0, 6.0),

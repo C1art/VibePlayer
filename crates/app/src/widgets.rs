@@ -35,7 +35,8 @@ pub fn button_enabled(
     let font = FontId::proportional(14.0);
     let galley = ui
         .painter()
-        .layout_no_wrap(text.to_owned(), font, theme::TEXT);
+        // The color comes when painting: it depends on the kind and the theme.
+        .layout_no_wrap(text.to_owned(), font, Color32::PLACEHOLDER);
     let icon_space = if icon.is_some() { 22.0 } else { 0.0 };
     let width = galley.size().x + icon_space + 28.0;
     let sense = if enabled {
@@ -49,14 +50,14 @@ pub fn button_enabled(
     let (fill, stroke, text_color) = match kind {
         Kind::Primary => (
             if pressed {
-                theme::ACCENT.gamma_multiply(0.8)
+                theme::accent().gamma_multiply(0.8)
             } else if hovered {
-                theme::ACCENT_SOFT
+                theme::accent_soft()
             } else {
-                theme::ACCENT
+                theme::accent()
             },
             Stroke::NONE,
-            Color32::WHITE,
+            theme::on_accent(),
         ),
         Kind::Secondary => (
             if hovered {
@@ -160,15 +161,17 @@ pub fn toggle_enabled(ui: &mut egui::Ui, on: &mut bool, label: &str, enabled: bo
     let how_on = ui.ctx().animate_bool(response.id, *on);
     let track = Rect::from_min_size(pos2(rect.left(), rect.center().y - switch.y / 2.0), switch);
     let fill = theme::BORDER
-        .lerp_to_gamma(theme::ACCENT, how_on)
+        .lerp_to_gamma(theme::accent(), how_on)
         .gamma_multiply(alpha);
     let painter = ui.painter();
     painter.rect_filled(track, 9.0, fill);
     let knob_x = egui::lerp(track.left() + 9.0..=track.right() - 9.0, how_on);
+    // On a light accent (Graphite) a white knob would vanish into the track.
+    let knob = Color32::WHITE.lerp_to_gamma(theme::on_accent(), how_on);
     painter.circle_filled(
         pos2(knob_x, track.center().y),
         7.0,
-        Color32::WHITE.gamma_multiply(alpha),
+        knob.gamma_multiply(alpha),
     );
     painter.galley(
         pos2(
@@ -235,7 +238,7 @@ pub fn balance_slider(
         painter.rect_filled(
             Rect::from_x_y_ranges(from..=to, track.y_range()),
             2.0,
-            theme::ACCENT,
+            theme::accent(),
         );
         painter.line_segment(
             [

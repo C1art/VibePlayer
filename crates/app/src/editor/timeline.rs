@@ -50,25 +50,25 @@ impl Timeline<'_> {
         painter.rect_filled(
             selected,
             CornerRadius::same(6),
-            theme::ACCENT.gamma_multiply(0.30),
+            theme::accent().gamma_multiply(0.30),
         );
         if let Some(keyframe) = self.keyframe_start {
             let span = Rect::from_x_y_ranges(x_of(keyframe)..=x_of(self.start), track.y_range());
-            painter.rect_filled(span, 0.0, theme::KEYFRAME.gamma_multiply(0.30));
+            painter.rect_filled(span, 0.0, theme::keyframe().gamma_multiply(0.30));
             let x = x_of(keyframe);
             painter.line_segment(
                 [pos2(x, track.top()), pos2(x, track.bottom())],
-                Stroke::new(2.0, theme::KEYFRAME),
+                Stroke::new(2.0, theme::keyframe()),
             );
         }
         if let Some(until) = self.reencoded_until {
             let span = Rect::from_x_y_ranges(x_of(self.start)..=x_of(until), track.y_range());
-            painter.rect_filled(span, 0.0, theme::SMART.gamma_multiply(0.35));
+            painter.rect_filled(span, 0.0, theme::smart().gamma_multiply(0.35));
         }
         painter.rect_stroke(
             selected,
             CornerRadius::same(6),
-            Stroke::new(2.0, theme::ACCENT),
+            Stroke::new(2.0, theme::accent()),
             egui::StrokeKind::Inside,
         );
         self.paint_keyframes(&painter, rect, &x_of);
@@ -121,7 +121,7 @@ impl Timeline<'_> {
             last_x = x;
             painter.line_segment(
                 [pos2(x, top), pos2(x, top + 7.0)],
-                Stroke::new(1.5, theme::KEYFRAME.gamma_multiply(0.75)),
+                Stroke::new(1.5, theme::keyframe().gamma_multiply(0.75)),
             );
         }
     }
@@ -174,7 +174,7 @@ fn handle(ui: &mut egui::Ui, track: Rect, x: f32, name: &str) -> egui::Response 
         if active {
             theme::TEXT
         } else {
-            theme::ACCENT_SOFT
+            theme::accent_soft()
         },
     );
     for dy in [-5.0, 0.0, 5.0] {

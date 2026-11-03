@@ -7,6 +7,8 @@ use crossbeam::channel::Receiver;
 use crate::actions::Action;
 
 // Drawn for the Windows taskbar; tested everywhere.
+#[cfg(windows)]
+mod app_icon;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod glyphs;
 pub mod single_instance;
@@ -162,6 +164,15 @@ impl NativeWindow {
             _ => None,
         }
     }
+}
+
+/// Shows the app icon in `theme`'s colors on the window and, on Windows, wherever the shell
+/// shows VibePlayer's icon (its shortcuts and the videos it opens).
+pub fn show_app_icon(window: NativeWindow, theme: library::ColorTheme) {
+    #[cfg(windows)]
+    app_icon::show(window.0, theme);
+    #[cfg(not(windows))]
+    let _ = (window, theme);
 }
 
 /// Moves and sizes `window` to `placement` (pixels, outer rectangle) if that rectangle is on a

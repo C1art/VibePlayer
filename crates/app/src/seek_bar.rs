@@ -55,7 +55,7 @@ impl SeekBar<'_> {
             painter.rect_filled(
                 span,
                 CornerRadius::same(3),
-                theme::ACCENT.gamma_multiply(0.45),
+                theme::accent().gamma_multiply(0.45),
             );
         }
         let mut input = SeekInput::default();
@@ -65,7 +65,7 @@ impl SeekBar<'_> {
             _ => self.position,
         };
         let played = Rect::from_x_y_ranges(track.left()..=to_x(displayed), track.y_range());
-        painter.rect_filled(played, CornerRadius::same(3), theme::ACCENT);
+        painter.rect_filled(played, CornerRadius::same(3), theme::accent());
         // Chapters show as small gaps cut into the track.
         for mark in self.chapters.iter().filter(|mark| mark.start > Ticks::ZERO) {
             let x = to_x(mark.start);

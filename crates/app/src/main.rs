@@ -59,11 +59,7 @@ fn main() -> eframe::Result {
         .with_inner_size([1280.0, 760.0])
         .with_min_inner_size([480.0, 300.0])
         .with_drag_and_drop(true)
-        .with_icon(Arc::new(egui::IconData {
-            rgba: include_bytes!("../resources/icon-64.rgba").to_vec(),
-            width: 64,
-            height: 64,
-        }));
+        .with_icon(theme::icon(settings.theme));
     let options = eframe::NativeOptions {
         viewport: window_state::restore(viewport, settings.window),
         wgpu_options: wgpu_configuration(settings.hdr_output),

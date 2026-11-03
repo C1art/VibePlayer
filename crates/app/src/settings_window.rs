@@ -1,5 +1,5 @@
 use eframe::egui::{self, RichText};
-use library::Settings;
+use library::{ColorTheme, Settings};
 
 use crate::theme;
 use crate::updates::Updates;
@@ -20,6 +20,10 @@ pub fn show(
         .default_width(380.0)
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing.y = 10.0;
+            section_title(ui, "Color");
+            changed |= theme_swatches(ui, &mut settings.theme);
+
+            ui.add_space(6.0);
             section_title(ui, "Playback");
             changed |= widgets::toggle(ui, &mut settings.hardware_decoding, "Hardware decoding")
                 .on_hover_text(
@@ -142,5 +146,33 @@ pub fn show(
                 }
             });
         });
+    changed
+}
+
+/// A row of color dots, one per theme. Returns whether the choice changed.
+fn theme_swatches(ui: &mut egui::Ui, chosen: &mut ColorTheme) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        for candidate in ColorTheme::ALL {
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+            let painter = ui.painter();
+            let selected = *chosen == candidate;
+            if selected || response.hovered() {
+                let ring = if selected {
+                    theme::TEXT
+                } else {
+                    theme::TEXT_DIM
+                };
+                painter.circle_stroke(rect.center(), 12.0, egui::Stroke::new(2.0, ring));
+            }
+            painter.circle_filled(rect.center(), 9.0, theme::swatch(candidate));
+            if response.on_hover_text(theme::name(candidate)).clicked() && !selected {
+                *chosen = candidate;
+                changed = true;
+            }
+        }
+    });
     changed
 }

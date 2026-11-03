@@ -11,5 +11,5 @@ mod store;
 pub use error::LibraryError;
 pub use history::{CutSession, History, RecentFile, ResumeEntry};
 pub use saver::Saver;
-pub use settings::{EditorPreferences, Settings, UpdatePreferences, WindowPlacement};
+pub use settings::{ColorTheme, EditorPreferences, Settings, UpdatePreferences, WindowPlacement};
 pub use store::{Store, data_dir};
