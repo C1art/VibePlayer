@@ -182,6 +182,9 @@ impl VibePlayerApp {
         let Some(session) = &mut self.session else {
             return;
         };
+        if let Some(render_state) = frame.wgpu_render_state() {
+            video_view::follow_display(render_state);
+        }
         let update = session.player.update(now);
         session.log.observe(&session.player);
         if update.frame_changed

@@ -66,7 +66,7 @@ fn main() -> eframe::Result {
         }));
     let options = eframe::NativeOptions {
         viewport: window_state::restore(viewport, settings.window),
-        wgpu_options: wgpu_configuration(),
+        wgpu_options: wgpu_configuration(settings.hdr_output),
         ..Default::default()
     };
     eframe::run_native(
@@ -86,7 +86,7 @@ fn main() -> eframe::Result {
 }
 
 /// Prefers DX12, asks for 16-bit textures when available, and allows 8K frames.
-fn wgpu_configuration() -> WgpuConfiguration {
+fn wgpu_configuration(high_dynamic_range: bool) -> WgpuConfiguration {
     let mut setup = WgpuSetupCreateNew::without_display_handle();
     setup.instance_descriptor.backends =
         wgpu::Backends::DX12 | wgpu::Backends::VULKAN | wgpu::Backends::METAL;
@@ -102,6 +102,7 @@ fn wgpu_configuration() -> WgpuConfiguration {
     });
     WgpuConfiguration {
         wgpu_setup: WgpuSetup::CreateNew(setup),
+        high_dynamic_range,
         ..Default::default()
     }
 }

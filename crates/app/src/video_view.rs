@@ -1,7 +1,7 @@
 use eframe::egui::{self, Rect};
 use eframe::egui_wgpu::{self, CallbackResources, CallbackTrait, RenderState};
 use media::VideoFrame;
-use render::VideoRenderer;
+use render::{DisplayLevels, VideoRenderer};
 
 /// Creates the renderer inside egui's wgpu resources. Returns whether 10/12-bit frames can
 /// be shown without reducing them to 8 bits.
@@ -20,6 +20,27 @@ pub fn upload(render_state: &RenderState, frame: &VideoFrame) {
     let mut egui_renderer = render_state.renderer.write();
     if let Some(renderer) = egui_renderer.callback_resources.get_mut::<VideoRenderer>() {
         renderer.upload(&render_state.device, &render_state.queue, frame);
+    }
+}
+
+/// Passes the display's HDR levels on to the video, when the surface can show them.
+pub fn follow_display(render_state: &RenderState) {
+    let levels = (render_state.color_space == eframe::wgpu::SurfaceColorSpace::ExtendedSrgbLinear)
+        .then(|| render_state.display.read().clone())
+        .flatten()
+        .filter(|info| info.coarse.and_then(|coarse| coarse.high_dynamic_range) == Some(true))
+        .and_then(|info| info.luminance)
+        .map(|luminance| DisplayLevels {
+            // scRGB's own white, 80 nits, if the system doesn't say.
+            sdr_white_nits: luminance
+                .sdr_white_nits
+                .filter(|n| *n > 0.0)
+                .unwrap_or(80.0),
+            peak_nits: luminance.max_nits.filter(|n| *n > 0.0).unwrap_or(1000.0),
+        });
+    let mut egui_renderer = render_state.renderer.write();
+    if let Some(renderer) = egui_renderer.callback_resources.get_mut::<VideoRenderer>() {
+        renderer.set_display(&render_state.queue, levels);
     }
 }
 

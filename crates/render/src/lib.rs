@@ -5,7 +5,7 @@ mod renderer;
 #[cfg(windows)]
 mod shared;
 
-pub use renderer::VideoRenderer;
+pub use renderer::{DisplayLevels, VideoRenderer};
 
 /// GPU features worth requesting when the adapter has them.
 pub fn optional_features() -> wgpu::Features {

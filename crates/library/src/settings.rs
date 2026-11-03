@@ -13,6 +13,8 @@ pub struct Settings {
     pub hardware_decoding: bool,
     /// Show hardware-decoded pictures straight from the GPU, without a copy through memory.
     pub gpu_frames: bool,
+    /// Present HDR video above SDR white on HDR displays; takes effect at the next launch.
+    pub hdr_output: bool,
     pub resume_playback: bool,
     /// Seconds jumped by the arrow keys.
     pub seek_step_seconds: u32,
@@ -41,6 +43,7 @@ impl Default for Settings {
             muted: false,
             hardware_decoding: true,
             gpu_frames: true,
+            hdr_output: true,
             resume_playback: true,
             seek_step_seconds: 5,
             updates: UpdatePreferences::default(),

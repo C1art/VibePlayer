@@ -42,6 +42,14 @@ pub fn show(
                     .changed();
                 });
             }
+            if cfg!(windows) {
+                changed |= widgets::toggle(ui, &mut settings.hdr_output, "HDR output")
+                    .on_hover_text(
+                        "On an HDR display, shows HDR video with its full brightness instead \
+                         of toning it down. Applies the next time VibePlayer starts.",
+                    )
+                    .changed();
+            }
             changed |= widgets::toggle(
                 ui,
                 &mut settings.resume_playback,

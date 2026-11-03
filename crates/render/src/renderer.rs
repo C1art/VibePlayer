@@ -1,8 +1,17 @@
 use media::{PlaneLayout, VideoFrame};
 
-use crate::color::ColorParams;
+use crate::color::{ColorParams, Output};
 
-const UNIFORM_SIZE: u64 = 9 * 16;
+/// An HDR display's brightness levels, for showing video on an scRGB surface.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DisplayLevels {
+    /// Where the system puts SDR white.
+    pub sdr_white_nits: f32,
+    /// The brightest the display can go.
+    pub peak_nits: f32,
+}
+
+const UNIFORM_SIZE: u64 = 10 * 16;
 
 struct PlaneTextures {
     key: (u32, u32, PlaneLayout),
@@ -23,7 +32,12 @@ pub struct VideoRenderer {
     showing: Option<wgpu::BindGroup>,
     #[cfg(windows)]
     shared: crate::shared::SharedFrames,
-    target_is_srgb: bool,
+    /// The window takes linear values: an sRGB or half-float (scRGB) surface.
+    linear_target: bool,
+    /// Set for an scRGB surface on an HDR display.
+    display: Option<DisplayLevels>,
+    /// The shown frame's color description, to redo the color setup when the display changes.
+    shown_color: Option<(media::ColorInfo, PlaneLayout, Option<f32>)>,
     high_bit_depth: bool,
 }
 
@@ -118,7 +132,10 @@ impl VideoRenderer {
             showing: None,
             #[cfg(windows)]
             shared: crate::shared::SharedFrames::default(),
-            target_is_srgb: target_format.is_srgb(),
+            linear_target: target_format.is_srgb()
+                || target_format == wgpu::TextureFormat::Rgba16Float,
+            display: None,
+            shown_color: None,
             high_bit_depth: device
                 .features()
                 .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM),
@@ -212,13 +229,38 @@ impl VideoRenderer {
     #[cfg(not(windows))]
     fn show_shared(&mut self, _device: &wgpu::Device, _queue: &wgpu::Queue, _frame: &VideoFrame) {}
 
-    fn write_color(&self, queue: &wgpu::Queue, frame: &VideoFrame) {
+    fn write_color(&mut self, queue: &wgpu::Queue, frame: &VideoFrame) {
         let peak = frame
             .luminance
             .max_content
             .or(frame.luminance.max_mastering);
-        let params = ColorParams::new(frame.color, frame.layout, peak, self.target_is_srgb);
+        self.shown_color = Some((frame.color, frame.layout, peak));
+        self.write_shown_color(queue);
+    }
+
+    fn write_shown_color(&self, queue: &wgpu::Queue) {
+        let Some((color, layout, peak)) = self.shown_color else {
+            return;
+        };
+        let output = match (self.linear_target, self.display) {
+            (true, Some(levels)) => Output::Scrgb {
+                sdr_white_nits: levels.sdr_white_nits,
+                peak_nits: levels.peak_nits,
+            },
+            (true, None) => Output::Linear,
+            (false, _) => Output::Gamma,
+        };
+        let params = ColorParams::new(color, layout, peak, output);
         queue.write_buffer(&self.uniforms, 0, &params.to_bytes());
+    }
+
+    /// Follows the display: `Some` for an HDR display behind a half-float surface, `None`
+    /// otherwise. A change redoes the shown frame's colors.
+    pub fn set_display(&mut self, queue: &wgpu::Queue, display: Option<DisplayLevels>) {
+        if display != self.display {
+            self.display = display;
+            self.write_shown_color(queue);
+        }
     }
 
     fn create_planes(&self, device: &wgpu::Device, key: (u32, u32, PlaneLayout)) -> PlaneTextures {
@@ -321,5 +363,6 @@ impl VideoRenderer {
         let _ = queue;
         self.planes = None;
         self.showing = None;
+        self.shown_color = None;
     }
 }
