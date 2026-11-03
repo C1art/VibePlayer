@@ -56,6 +56,8 @@ pub(crate) struct Remuxed {
     pub reencoded_frames: usize,
     pub streams: usize,
     pub reencoded_audio: bool,
+    /// The cut-on stream in the output, when it is video.
+    pub video: Option<StreamIndex>,
 }
 
 pub(crate) fn remux(
@@ -181,6 +183,11 @@ pub(crate) fn remux(
     // The seek can land on an earlier keyframe (formats that seek by decode time); everything
     // of the primary stream before the planned one is left out.
     let mut reached_start = false;
+    let is_subtitle: Vec<bool> = info
+        .streams
+        .iter()
+        .map(|stream| stream.kind == StreamKind::Subtitle)
+        .collect();
 
     let mut packet = Packet::new()?;
     let mut finished = vec![false; outputs.len()];
@@ -240,6 +247,13 @@ pub(crate) fn remux(
                     plan.keeps_other(pts, timebase)
                 };
                 if keep {
+                    if is_subtitle[input_index.0] {
+                        // A cue running past the end stops there, as the clip does.
+                        let end = plan.range_in(timebase).1;
+                        if packet.duration() > Ticks::ZERO && pts + packet.duration() > end {
+                            packet.set_duration(end - pts);
+                        }
+                    }
                     restamp(&mut packet, plan, timebase, out_timebase, out_index);
                     muxer.write(&mut packet)?;
                 }
@@ -290,12 +304,22 @@ pub(crate) fn remux(
             reencode.drain_encoder(&mut muxer, true)?;
         }
     }
+    // Stopping here keeps a cancel from being outlasted by the trailer and verification.
+    if cancel.load(Ordering::Relaxed) {
+        return Err(ExportError::Cancelled);
+    }
     muxer.finish()?;
     progress(1.0);
+    let video = info
+        .streams
+        .get(plan.stream.0)
+        .filter(|stream| stream.kind == StreamKind::Video)
+        .and(primary_output.map(|(index, _, _)| index));
     Ok(Remuxed {
         reencoded_frames,
         streams,
         reencoded_audio,
+        video,
     })
 }
 

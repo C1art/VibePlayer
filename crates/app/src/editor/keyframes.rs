@@ -27,11 +27,7 @@ impl KeyframeFinder {
                     let span = demuxer
                         .as_mut()
                         .and_then(|d| d.keyframes_around(stream, target).ok())
-                        .unwrap_or(KeyframeSpan {
-                            before: None,
-                            after: None,
-                            frames_until_after: 0,
-                        });
+                        .unwrap_or_default();
                     if result_sender.send((target, span)).is_err() {
                         return;
                     }
@@ -51,8 +47,8 @@ impl KeyframeFinder {
         while let Ok(result) = self.results.try_recv() {
             self.latest = Some(result);
         }
-        match self.latest {
-            Some((asked, span)) if asked == target => Some(span),
+        match &self.latest {
+            Some((asked, span)) if *asked == target => Some(span.clone()),
             _ => {
                 if self.asked != Some(target) {
                     self.asked = Some(target);

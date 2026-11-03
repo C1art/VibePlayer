@@ -186,7 +186,7 @@ fn export_speed() {
                 continue;
             };
             let planned = if smart {
-                request.plan_smart(span.before, span.after, span.frames_until_after)
+                request.plan_smart(span.before, span.after, &span.frame_times)
             } else {
                 request.plan(span.before)
             };

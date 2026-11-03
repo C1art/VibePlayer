@@ -80,7 +80,7 @@ fn smart_cut(name: &str, start: f64, end: f64, out: &str) -> (PathBuf, ExportRes
     };
     let span = demuxer.keyframes_around(stream, request.start).unwrap();
     let plan = request
-        .plan_smart(span.before, span.after, span.frames_until_after)
+        .plan_smart(span.before, span.after, &span.frame_times)
         .unwrap();
     assert!(plan.reencode.is_some(), "{name}: start is a keyframe");
     let output = output(out);
@@ -190,7 +190,7 @@ fn smart_cut_refuses_codecs_it_cannot_encode() {
     };
     let span = demuxer.keyframes_around(stream, request.start).unwrap();
     let plan = request
-        .plan_smart(span.before, span.after, span.frames_until_after)
+        .plan_smart(span.before, span.after, &span.frame_times)
         .unwrap();
     let request = ExportRequest {
         source,

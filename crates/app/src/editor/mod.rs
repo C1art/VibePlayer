@@ -216,10 +216,12 @@ impl Editor {
     pub fn plan(&mut self) -> Option<Result<CutPlan, cut::CutError>> {
         let request = self.request();
         let span = self.keyframes.lookup(request.start)?;
-        Some(if self.uses_smart_cut() {
-            request.plan_smart(span.before, span.after, span.frames_until_after)
-        } else {
-            request.plan(span.before)
+        Some(match (span.before, span.after) {
+            (None, Some(first)) => request.plan_from_first_keyframe(first),
+            _ if self.uses_smart_cut() => {
+                request.plan_smart(span.before, span.after, &span.frame_times)
+            }
+            _ => request.plan(span.before),
         })
     }
 

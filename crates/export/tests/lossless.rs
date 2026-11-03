@@ -104,6 +104,32 @@ fn transport_streams_with_b_frames_start_on_the_keyframe() {
 
 #[test]
 #[ignore]
+fn a_subtitle_running_past_the_end_stops_there() {
+    // The fixture's second cue runs from 2.0 s to 3.0 s; the cut ends at 2.5 s.
+    let source = fixture("multi_audio.mkv");
+    let out = output("subtitle_end.mkv");
+    export(
+        &source,
+        &out,
+        plan(&source, 0.5, 2.5),
+        AudioChanges::default(),
+    )
+    .unwrap();
+    let mut demuxer = Demuxer::open(&out).unwrap();
+    let stream = demuxer.best_stream(StreamKind::Subtitle).unwrap();
+    let timebase = demuxer.timebase(stream).unwrap();
+    demuxer.select_streams(&[stream]);
+    let mut packet = Packet::new().unwrap();
+    let mut last_end = Ticks::ZERO;
+    while demuxer.read(&mut packet).unwrap() {
+        last_end = packet.pts().unwrap() + packet.duration();
+    }
+    let seconds = last_end.display_seconds(timebase);
+    assert!((2.4..=2.55).contains(&seconds), "{seconds}");
+}
+
+#[test]
+#[ignore]
 fn every_stream_survives_the_cut() {
     let source = fixture("multi_audio.mkv");
     let out = output("streams.mkv");

@@ -8,14 +8,22 @@ const SCAN_LIMIT: usize = 10_000;
 const RETRY_BACK: Ticks = Ticks(10_000_000);
 
 /// The keyframes on either side of a position, in the stream's timebase.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KeyframeSpan {
     /// The last keyframe at or before the position.
     pub before: Option<Ticks>,
     /// The first keyframe after the position, if one was found.
     pub after: Option<Ticks>,
-    /// Frames shown from the position up to `after` (or as far as the scan went).
-    pub frames_until_after: u32,
+    /// When each frame from the position up to `after` (or as far as the scan went) is shown,
+    /// in order.
+    pub frame_times: Vec<Ticks>,
+}
+
+impl KeyframeSpan {
+    /// Frames shown from the position up to the next keyframe.
+    pub fn frames_until_after(&self) -> usize {
+        self.frame_times.len()
+    }
 }
 
 impl Demuxer {
@@ -87,11 +95,12 @@ impl Demuxer {
             }
         }
         let limit = after.unwrap_or(Ticks(i64::MAX));
-        let frames = shown.iter().filter(|&&pts| pts < limit).count();
+        shown.retain(|&pts| pts < limit);
+        shown.sort_unstable();
         Ok(KeyframeSpan {
             before,
             after,
-            frames_until_after: u32::try_from(frames).unwrap_or(u32::MAX),
+            frame_times: shown,
         })
     }
 }

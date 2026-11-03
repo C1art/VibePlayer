@@ -67,7 +67,7 @@ pub fn show(
 
     let plan = editor.plan();
     let keyframe_start = match &plan {
-        Some(Ok(plan)) if plan.start_shift() > Ticks::ZERO => {
+        Some(Ok(plan)) if plan.start_shift() != Ticks::ZERO => {
             Some(editor.plan_start_position(plan))
         }
         _ => None,
@@ -305,6 +305,15 @@ fn status(
                     color: theme::SMART,
                 }
             }
+            _ if plan.start_shift() < Ticks::ZERO => Status {
+                text: format!(
+                    "Starts at the first keyframe at {}, {:.3} s after your start: nothing \
+                     before it can be decoded.{audio}",
+                    clock(editor.plan_start_position(plan)),
+                    seconds(Ticks(-plan.start_shift().0).rescale(plan.timebase, Timebase::MICROS))
+                ),
+                color: theme::KEYFRAME,
+            },
             _ if plan.start_shift() > Ticks::ZERO => {
                 let shift = plan.start_shift().rescale(plan.timebase, Timebase::MICROS);
                 Status {

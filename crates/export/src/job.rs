@@ -117,6 +117,10 @@ pub fn run(
         return Err(ExportError::OutputExists(request.output.clone()));
     }
     let temp = temp_path(&request.output);
+    // A leftover temp file opened as the source would be truncated by writing the temp.
+    if same_file(&request.source, &temp) {
+        return Err(ExportError::WouldOverwriteSource(temp));
+    }
     let result = remux(
         &request.source,
         &temp,
@@ -130,7 +134,10 @@ pub fn run(
             .plan
             .duration()
             .rescale(request.plan.timebase, Timebase::MICROS);
-        let duration = verify(&temp, remuxed.streams, expected)?;
+        let duration = verify(&temp, remuxed.streams, remuxed.video, expected)?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(ExportError::Cancelled);
+        }
         if request.output.exists() {
             return Err(ExportError::OutputExists(request.output.clone()));
         }
