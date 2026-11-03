@@ -150,6 +150,10 @@ struct UniformBuffer {
     ///
     /// See also <https://github.com/emilk/egui/issues/5295>.
     predictable_texture_filtering: u32,
+
+    /// VibePlayer: multiplies linear output, so white lands at an HDR display's SDR white.
+    output_scale: f32,
+    _padding: [u32; 3],
 }
 
 struct SlicedBuffer {
@@ -241,6 +245,8 @@ pub struct Renderer {
     vertex_buffer: SlicedBuffer,
 
     uniform_buffer: wgpu::Buffer,
+    /// VibePlayer: see [`Renderer::set_output_scale`].
+    output_scale: f32,
     previous_uniform_buffer_content: UniformBuffer,
     uniform_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
@@ -266,6 +272,12 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// VibePlayer: scales linear output (on sRGB and half-float targets), e.g. to put white at
+    /// an HDR display's SDR white level in an scRGB surface.
+    pub fn set_output_scale(&mut self, scale: f32) {
+        self.output_scale = scale;
+    }
+
     /// Creates a renderer for a egui UI.
     ///
     /// `output_color_format` should preferably be [`wgpu::TextureFormat::Rgba8Unorm`] or
@@ -292,6 +304,8 @@ impl Renderer {
                 screen_size_in_points: [0.0, 0.0],
                 dithering: u32::from(options.dithering),
                 predictable_texture_filtering: u32::from(options.predictable_texture_filtering),
+                output_scale: 1.0,
+                _padding: [0; 3],
             }]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -432,7 +446,10 @@ impl Renderer {
 
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
-                    entry_point: Some(if output_color_format.is_srgb() {
+                    // VibePlayer: a half-float (scRGB) target takes linear values too.
+                    entry_point: Some(if output_color_format.is_srgb()
+                        || output_color_format == wgpu::TextureFormat::Rgba16Float
+                    {
                         log::warn!("Detected a linear (sRGBA aware) framebuffer {output_color_format:?}. egui prefers Rgba8Unorm or Bgra8Unorm");
                         "fs_main_linear_framebuffer"
                     } else {
@@ -482,6 +499,7 @@ impl Renderer {
             uniform_buffer,
             // Buffers on wgpu are zero initialized, so this is indeed its current state!
             previous_uniform_buffer_content: UniformBuffer::zeroed(),
+            output_scale: 1.0,
             uniform_bind_group,
             texture_bind_group_layout,
             texture_flag_buffers,
@@ -977,6 +995,8 @@ impl Renderer {
             screen_size_in_points,
             dithering: u32::from(self.options.dithering),
             predictable_texture_filtering: u32::from(self.options.predictable_texture_filtering),
+            output_scale: self.output_scale,
+            _padding: [0; 3],
         };
         if uniform_buffer_content != self.previous_uniform_buffer_content {
             profiling::scope!("update uniforms");

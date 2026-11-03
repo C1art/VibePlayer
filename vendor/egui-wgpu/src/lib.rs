@@ -127,6 +127,12 @@ pub struct RenderState {
 
     /// Egui renderer responsible for drawing the UI.
     pub renderer: Arc<RwLock<Renderer>>,
+
+    /// VibePlayer: the color space the surface is configured in.
+    pub color_space: wgpu::SurfaceColorSpace,
+
+    /// VibePlayer: the latest HDR information about the window's display, when known.
+    pub display: Arc<RwLock<Option<wgpu::DisplayHdrInfo>>>,
 }
 
 async fn request_adapter(
@@ -269,6 +275,23 @@ impl RenderState {
             )
         };
         let target_format = crate::preferred_framebuffer_format(&surface_formats)?;
+        // VibePlayer: an extended-range linear (scRGB) half-float surface when HDR is wanted
+        // and the surface offers one.
+        let hdr_capable = config.high_dynamic_range
+            && compatible_surface.is_some_and(|surface| {
+                surface
+                    .get_capabilities(&adapter)
+                    .color_spaces(wgpu::TextureFormat::Rgba16Float)
+                    .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR)
+            });
+        let (target_format, color_space) = if hdr_capable {
+            (
+                wgpu::TextureFormat::Rgba16Float,
+                wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
+            )
+        } else {
+            (target_format, wgpu::SurfaceColorSpace::Auto)
+        };
 
         let renderer = Renderer::new(&device, target_format, options);
 
@@ -284,6 +307,8 @@ impl RenderState {
             queue,
             target_format,
             renderer: Arc::new(RwLock::new(renderer)),
+            color_space,
+            display: Arc::new(RwLock::new(None)),
         })
     }
 }
@@ -339,6 +364,10 @@ pub struct WgpuConfiguration {
     /// in that case either.
     pub on_surface_status:
         Arc<dyn Fn(&wgpu::CurrentSurfaceTexture) -> SurfaceErrorAction + Send + Sync>,
+
+    /// VibePlayer: present through a half-float scRGB surface where available, so content
+    /// brighter than SDR white can reach HDR displays.
+    pub high_dynamic_range: bool,
 }
 
 // Compile-time check that `WgpuConfiguration` is `Send + Sync`.
@@ -363,10 +392,12 @@ impl core::fmt::Debug for WgpuConfiguration {
             surface,
             wgpu_setup,
             on_surface_status: _,
+            high_dynamic_range,
         } = self;
         f.debug_struct("WgpuConfiguration")
             .field("surface", &surface)
             .field("wgpu_setup", &wgpu_setup)
+            .field("high_dynamic_range", &high_dynamic_range)
             .finish_non_exhaustive()
     }
 }
@@ -387,6 +418,7 @@ impl Default for WgpuConfiguration {
             // No display handle available at this point — callers should replace this with
             // `WgpuSetup::from_display_handle(...)` before creating the instance if one is available.
             wgpu_setup: WgpuSetup::without_display_handle(),
+            high_dynamic_range: false,
             on_surface_status: Arc::new(|status| match status {
                 wgpu::CurrentSurfaceTexture::Outdated => {
                     // The compositor changed the surface (resize, scale, output, …). wgpu

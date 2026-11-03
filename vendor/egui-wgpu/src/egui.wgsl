@@ -15,6 +15,9 @@ struct Locals {
     /// 1 to do manual filtering for more predictable kittest snapshot images.
     /// See also https://github.com/emilk/egui/issues/5295
     predictable_texture_filtering: u32,
+
+    /// VibePlayer: multiplies linear output (HDR displays' SDR white level).
+    output_scale: f32,
 };
 @group(0) @binding(0) var<uniform> r_locals: Locals;
 
@@ -183,7 +186,7 @@ fn fs_main_linear_framebuffer(in: VertexOutput) -> @location(0) vec4<f32> {
         let out_color_gamma_rgb = dither_interleaved(out_color_gamma.rgb, 256.0, in.position);
         out_color_gamma = vec4<f32>(out_color_gamma_rgb, out_color_gamma.a);
     }
-    let out_color_linear = linear_from_gamma_rgb(out_color_gamma.rgb);
+    let out_color_linear = linear_from_gamma_rgb(out_color_gamma.rgb) * r_locals.output_scale;
     return vec4<f32>(out_color_linear, out_color_gamma.a);
 }
 

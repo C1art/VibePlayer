@@ -17,6 +17,8 @@ struct SurfaceState {
     resizing: bool,
     needs_reconfigure: bool,
     needs_recreate: bool,
+    /// VibePlayer: when the display's HDR state was last read.
+    display_checked: Option<web_time::Instant>,
 }
 
 /// Everything you need to paint egui with [`wgpu`] on [`winit`].
@@ -107,6 +109,47 @@ impl Painter {
         }
     }
 
+    /// VibePlayer: rereads the display's HDR state now and then (the window can move to
+    /// another display, HDR can be switched, the SDR white level changes), and on an scRGB
+    /// surface scales egui's output so white matches the system's SDR white. Returns the clear
+    /// color in the surface's encoding.
+    fn follow_display(
+        surface_state: &mut SurfaceState,
+        render_state: &RenderState,
+        clear_color: [f32; 4],
+    ) -> [f32; 4] {
+        if render_state.color_space != wgpu::SurfaceColorSpace::ExtendedSrgbLinear {
+            return clear_color;
+        }
+        let due = surface_state
+            .display_checked
+            .is_none_or(|checked| checked.elapsed() >= std::time::Duration::from_secs(1));
+        if due {
+            surface_state.display_checked = Some(web_time::Instant::now());
+            let info = surface_state.surface.display_hdr_info(&render_state.adapter);
+            *render_state.display.write() = Some(info);
+        }
+        // scRGB 1.0 is 80 nits; SDR content should appear at the user's SDR white level.
+        let scale = render_state
+            .display
+            .read()
+            .as_ref()
+            .filter(|info| info.coarse.and_then(|c| c.high_dynamic_range) == Some(true))
+            .and_then(|info| info.luminance?.sdr_white_nits)
+            .filter(|nits| nits.is_finite() && *nits > 0.0)
+            .map_or(1.0, |nits| nits / 80.0);
+        render_state.renderer.write().set_output_scale(scale);
+        let linear = |gamma: f32| {
+            if gamma <= 0.04045 {
+                gamma / 12.92
+            } else {
+                ((gamma + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let [r, g, b, a] = clear_color;
+        [linear(r) * scale, linear(g) * scale, linear(b) * scale, a]
+    }
+
     fn configure_surface(
         surface_state: &SurfaceState,
         render_state: &RenderState,
@@ -146,6 +189,8 @@ impl Painter {
         if let Some(desired_maximum_frame_latency) = desired_maximum_frame_latency {
             surf_config.desired_maximum_frame_latency = desired_maximum_frame_latency;
         }
+        // VibePlayer: the color space chosen with the format (scRGB for HDR).
+        surf_config.color_space = render_state.color_space;
 
         surface_state
             .surface
@@ -312,6 +357,7 @@ impl Painter {
                 resizing,
                 needs_reconfigure: false,
                 needs_recreate: false,
+                display_checked: None,
             },
         );
         let Some(width) = NonZeroU32::new(width) else {
@@ -590,6 +636,7 @@ impl Painter {
             Self::configure_surface(surface_state, render_state, &self.config.surface);
             surface_state.needs_reconfigure = false;
         }
+        let clear_color = Self::follow_display(surface_state, render_state, clear_color);
 
         let output_frame = {
             profiling::scope!("get_current_texture");
