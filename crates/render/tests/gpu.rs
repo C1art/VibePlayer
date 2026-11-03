@@ -32,6 +32,7 @@ fn first_frame(name: &str) -> VideoFrame {
     let options = VideoOptions {
         hardware: HardwareDecoding::Off,
         high_bit_depth: true,
+        deinterlace: true,
     };
     let mut decoder = VideoDecoder::new(demuxer.stream_params(stream).unwrap(), options).unwrap();
     let mut packet = Packet::new().unwrap();

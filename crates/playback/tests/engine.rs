@@ -19,6 +19,7 @@ fn options(autoplay: bool) -> PlayerOptions {
         video: VideoOptions {
             hardware: HardwareDecoding::Off,
             high_bit_depth: true,
+            deinterlace: true,
         },
         volume: audio::Volume::default(),
         muted: true,

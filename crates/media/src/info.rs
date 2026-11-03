@@ -133,7 +133,7 @@ fn stream_info(stream: &StreamRef<'_>) -> StreamInfo {
                 height: params.height(),
                 frame_rate: average.or(real),
                 variable_frame_rate: matches!((average, real), (Some(a), Some(r))
-                    if i64::from(a.0) * i64::from(r.1) != i64::from(r.0) * i64::from(a.1)),
+                    if rates_differ(a, r)),
                 pixel_format: params.pixel_format_name(),
                 bit_depth: params.bits_per_raw_sample(),
                 color: params.color(),
@@ -171,5 +171,34 @@ fn stream_info(stream: &StreamRef<'_>) -> StreamInfo {
         frame_count: stream.frame_count(),
         metadata: stream.metadata(),
         details,
+    }
+}
+
+/// Whether the average and base frame rates disagree enough to mean a variable rate. They
+/// rarely match exactly even at a constant rate: Matroska's millisecond timestamps skew the
+/// average, and interlaced streams report the field rate as the base.
+fn rates_differ(average: (i32, i32), real: (i32, i32)) -> bool {
+    let rate = |(num, den): (i32, i32)| (den != 0).then(|| f64::from(num) / f64::from(den));
+    let (Some(average), Some(real)) = (rate(average), rate(real)) else {
+        return false;
+    };
+    if average <= 0.0 || real <= 0.0 {
+        return false;
+    }
+    let ratio = average / real;
+    [0.5, 1.0, 2.0]
+        .iter()
+        .all(|expected| (ratio / expected - 1.0).abs() > 0.01)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rates_differ;
+
+    #[test]
+    fn constant_rates_reported_two_ways_are_not_variable() {
+        assert!(!rates_differ((2997, 125), (24_000, 1_001)));
+        assert!(!rates_differ((25, 1), (50, 1)));
+        assert!(rates_differ((20, 1), (30, 1)));
     }
 }

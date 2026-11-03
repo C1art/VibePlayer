@@ -59,6 +59,7 @@ impl SmartHead {
             VideoOptions {
                 hardware: HardwareDecoding::Off,
                 high_bit_depth: true,
+                deinterlace: false,
             },
         )?;
         let view = params.view();

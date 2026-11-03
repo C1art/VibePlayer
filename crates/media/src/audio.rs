@@ -108,6 +108,19 @@ impl Default for AudioEffects {
     }
 }
 
+/// Layouts for common device channel counts, in the speaker order Windows uses for them.
+const PLAYBACK_LAYOUTS: [(u16, &str); 9] = [
+    (1, "mono"),
+    (2, "stereo"),
+    (3, "2.1"),
+    (4, "quad"),
+    (5, "5.0(side)"),
+    (6, "5.1"),
+    (7, "6.1"),
+    (8, "7.1"),
+    (12, "7.1.4"),
+];
+
 /// The sample format, rate and channel layout audio must come out in.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AudioTarget {
@@ -123,27 +136,29 @@ pub struct AudioTarget {
 impl AudioTarget {
     /// Interleaved `f32` for an output device with `channels` channels.
     pub fn playback(sample_rate: u32, channels: u16) -> AudioTarget {
-        let layout = match channels {
-            1 => "mono",
-            6 => "5.1",
-            8 => "7.1",
-            _ => "stereo",
-        };
+        // The device reads exactly `channels` samples per frame, so the layout must match.
+        let layout = PLAYBACK_LAYOUTS
+            .iter()
+            .find(|(count, _)| *count == channels)
+            .map_or_else(
+                || format!("{}c", channels.max(1)),
+                |(_, name)| (*name).into(),
+            );
         AudioTarget {
             sample_format: "flt".into(),
             sample_rate,
-            layout: layout.into(),
+            layout,
             frame_size: None,
         }
     }
 
     pub fn channel_count(&self) -> u16 {
-        match self.layout.as_str() {
-            "mono" => 1,
-            "5.1" => 6,
-            "7.1" => 8,
-            _ => 2,
-        }
+        PLAYBACK_LAYOUTS
+            .iter()
+            .find(|(_, name)| *name == self.layout)
+            .map(|(count, _)| *count)
+            .or_else(|| self.layout.strip_suffix('c')?.parse().ok())
+            .unwrap_or(2)
     }
 }
 
@@ -374,6 +389,16 @@ impl AudioDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playback_layouts_have_the_device_channel_count() {
+        for channels in 1..=16 {
+            assert_eq!(
+                AudioTarget::playback(48_000, channels).channel_count(),
+                channels
+            );
+        }
+    }
 
     #[test]
     fn speed_conversions_are_inverse_at_any_speed() {

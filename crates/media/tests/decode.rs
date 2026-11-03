@@ -18,6 +18,7 @@ fn fixture(name: &str) -> PathBuf {
 const SOFTWARE: VideoOptions = VideoOptions {
     hardware: HardwareDecoding::Off,
     high_bit_depth: true,
+    deinterlace: true,
 };
 
 fn decode_video(name: &str, options: VideoOptions) -> Vec<VideoFrame> {

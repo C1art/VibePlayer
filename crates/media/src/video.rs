@@ -6,6 +6,7 @@ use crate::ffi::{
     CodecContext, FilterGraph, FilterMedia, Frame, HwDevice, MasteringLuminance, Packet, Received,
     StreamParams, pixel_format_name,
 };
+use crate::replay::ReplayBuffer;
 use crate::{ColorInfo, ColorRange, Matrix, MediaError, Primaries};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,6 +20,8 @@ pub struct VideoOptions {
     pub hardware: HardwareDecoding,
     /// Whether frames may come out with more than 8 bits per sample; otherwise they're reduced.
     pub high_bit_depth: bool,
+    /// Whether interlaced frames are deinterlaced, as for display; re-encoding keeps fields.
+    pub deinterlace: bool,
 }
 
 /// How the three planes of a [`VideoFrame`] are laid out.
@@ -152,11 +155,18 @@ pub struct VideoDecoder {
     stream_color: ColorInfo,
     stream_interlaced: bool,
     filter: Option<ActiveFilter>,
+    /// A deinterlacing graph replaced mid-stream, still giving out the frame it held back.
+    retiring: Option<ActiveFilter>,
     filter_drained: bool,
     decoded: Frame,
     downloaded: Frame,
     filtered: Frame,
     skipped: u64,
+    replay: ReplayBuffer,
+    /// The last frame given out, in stream ticks.
+    last_output: Option<Ticks>,
+    /// After a fallback replays the GOP: frames up to here were given out already.
+    skip_through: Option<Ticks>,
 }
 
 impl VideoDecoder {
@@ -170,11 +180,15 @@ impl VideoDecoder {
             codec,
             options,
             filter: None,
+            retiring: None,
             filter_drained: false,
             decoded: Frame::new()?,
             downloaded: Frame::new()?,
             filtered: Frame::new()?,
             skipped: 0,
+            replay: ReplayBuffer::default(),
+            last_output: None,
+            skip_through: None,
         })
     }
 
@@ -190,10 +204,22 @@ impl VideoDecoder {
     /// Feeds a packet, or `None` at the end of the stream. Returns `false` when frames must be
     /// received first; send the same packet again afterwards. Bad packets are skipped.
     pub fn send(&mut self, packet: Option<&Packet>) -> Result<bool, MediaError> {
+        let hardware = self.codec.is_hardware();
         match self.codec.send_packet(packet) {
-            Ok(accepted) => Ok(accepted),
-            Err(_) if self.codec.is_hardware() => {
-                self.fall_back_to_software()?;
+            Ok(accepted) => {
+                if accepted
+                    && hardware
+                    && let Some(packet) = packet
+                {
+                    self.replay.record(packet)?;
+                }
+                Ok(accepted)
+            }
+            Err(_) if hardware => {
+                if let Some(packet) = packet {
+                    self.replay.record(packet)?;
+                }
+                self.fall_back_to_software(packet.is_none())?;
                 Ok(true)
             }
             Err(_) => {
@@ -206,17 +232,30 @@ impl VideoDecoder {
     /// The next decoded frame, or `None` when more input is needed or the stream has ended.
     pub fn receive(&mut self) -> Result<Option<VideoFrame>, MediaError> {
         loop {
+            if let Some(retiring) = &mut self.retiring {
+                if retiring.graph.pull(&mut self.filtered)? == Received::Output {
+                    let timebase = retiring.output_timebase;
+                    if let Some(frame) = self.finish_frame(timebase)? {
+                        return Ok(Some(frame));
+                    }
+                    continue;
+                }
+                self.retiring = None;
+            }
             if let Some(filter) = &mut self.filter
                 && filter.graph.pull(&mut self.filtered)? == Received::Output
             {
                 let timebase = filter.output_timebase;
-                return self.finish_frame(timebase).map(Some);
+                if let Some(frame) = self.finish_frame(timebase)? {
+                    return Ok(Some(frame));
+                }
+                continue;
             }
             match self.codec.receive_frame(&mut self.decoded) {
                 Ok(Received::Output) => {
                     if self.filter_decoded().is_err() {
                         if self.codec.is_hardware() {
-                            self.fall_back_to_software()?;
+                            self.fall_back_to_software(false)?;
                         } else {
                             self.skipped += 1;
                             self.filter = None;
@@ -233,7 +272,7 @@ impl VideoDecoder {
                         filter.graph.push(None)?;
                     }
                 }
-                Err(_) if self.codec.is_hardware() => self.fall_back_to_software()?,
+                Err(_) if self.codec.is_hardware() => self.fall_back_to_software(false)?,
                 Err(_) => self.skipped += 1,
             }
         }
@@ -243,15 +282,52 @@ impl VideoDecoder {
     pub fn flush(&mut self) {
         self.codec.flush();
         self.filter = None;
+        self.retiring = None;
         self.filter_drained = false;
+        self.replay.clear();
+        self.last_output = None;
+        self.skip_through = None;
     }
 
-    fn fall_back_to_software(&mut self) -> Result<(), MediaError> {
+    /// Switches to software decoding and feeds it the current GOP again from its keyframe, so
+    /// the picture carries on instead of breaking up until the next keyframe.
+    fn fall_back_to_software(&mut self, draining: bool) -> Result<(), MediaError> {
         self.codec = open_codec(&self.params, HardwareDecoding::Off)?;
         self.options.hardware = HardwareDecoding::Off;
         self.filter = None;
+        self.retiring = None;
         self.filter_drained = false;
+        self.skip_through = self.last_output;
+        for packet in self.replay.take() {
+            self.feed_software(Some(&packet));
+        }
+        if draining {
+            self.feed_software(None);
+        }
         Ok(())
+    }
+
+    /// Sends a packet, taking frames out into the filter whenever the decoder is full.
+    fn feed_software(&mut self, packet: Option<&Packet>) {
+        loop {
+            match self.codec.send_packet(packet) {
+                Ok(true) => return,
+                Ok(false) => match self.codec.receive_frame(&mut self.decoded) {
+                    Ok(Received::Output) => {
+                        if self.filter_decoded().is_err() {
+                            self.skipped += 1;
+                            self.filter = None;
+                        }
+                    }
+                    Ok(Received::Again | Received::Eof) => return,
+                    Err(_) => self.skipped += 1,
+                },
+                Err(_) => {
+                    self.skipped += 1;
+                    return;
+                }
+            }
+        }
     }
 
     fn filter_decoded(&mut self) -> Result<(), MediaError> {
@@ -265,9 +341,17 @@ impl VideoDecoder {
             width: source.width(),
             height: source.height(),
             format: source.format(),
-            deinterlace: self.stream_interlaced || source.is_interlaced(),
+            deinterlace: self.options.deinterlace
+                && (self.stream_interlaced || source.is_interlaced()),
         };
         if self.filter.as_ref().is_none_or(|f| f.key != key) {
+            // The deinterlacer holds a frame back; drain it rather than drop it.
+            if let Some(mut old) = self.filter.take()
+                && old.key.deinterlace
+                && old.graph.push(None).is_ok()
+            {
+                self.retiring = Some(old);
+            }
             self.filter = Some(build_filter(
                 key,
                 source,
@@ -281,22 +365,29 @@ impl VideoDecoder {
         filter.graph.push(Some(source))
     }
 
-    fn finish_frame(&mut self, timebase: Timebase) -> Result<VideoFrame, MediaError> {
+    /// The filtered frame, or `None` if a fallback's replay already gave it out.
+    fn finish_frame(&mut self, timebase: Timebase) -> Result<Option<VideoFrame>, MediaError> {
         let frame = mem::replace(&mut self.filtered, Frame::new()?);
         let format = pixel_format_name(frame.format()).unwrap_or_default();
         let layout = PlaneLayout::from_format_name(&format)
             .ok_or_else(|| MediaError::Unsupported(format!("filtered pixel format {format}")))?;
         let pts = frame.filtered_pts().unwrap_or(Ticks::ZERO);
+        let stream_pts = pts.rescale(timebase, self.params.timebase());
+        if self.skip_through.is_some_and(|shown| stream_pts <= shown) {
+            return Ok(None);
+        }
+        self.skip_through = None;
+        self.last_output = Some(stream_pts);
         let color = merge_color(frame.color(), self.stream_color).resolved(frame.height());
-        Ok(VideoFrame {
+        Ok(Some(VideoFrame {
             pts: pts.rescale(timebase, Timebase::MICROS),
-            stream_pts: pts.rescale(timebase, self.params.timebase()),
+            stream_pts,
             duration: frame.duration().rescale(timebase, Timebase::MICROS),
             layout,
             color,
             luminance: frame.mastering_luminance(),
             frame,
-        })
+        }))
     }
 }
 

@@ -180,8 +180,14 @@ mod tests {
 
     #[test]
     fn a_snapped_start_stays_before_the_end() {
-        assert_eq!(snap_start(&KEYS, Ticks(1_800), Ticks(1_900)), Some(Ticks(1_000)));
-        assert_eq!(snap_start(&KEYS, Ticks(1_800), Ticks(5_000)), Some(Ticks(2_000)));
+        assert_eq!(
+            snap_start(&KEYS, Ticks(1_800), Ticks(1_900)),
+            Some(Ticks(1_000))
+        );
+        assert_eq!(
+            snap_start(&KEYS, Ticks(1_800), Ticks(5_000)),
+            Some(Ticks(2_000))
+        );
     }
 
     #[test]

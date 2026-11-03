@@ -94,33 +94,4 @@ impl Demuxer {
             frames_until_after: u32::try_from(frames).unwrap_or(u32::MAX),
         })
     }
-
-    /// Reads `stream` from the start and reports keyframe timestamps in batches, so a long
-    /// file shows progress. Stops early when `report` returns `false`.
-    pub fn scan_all_keyframes(
-        &mut self,
-        stream: StreamIndex,
-        mut report: impl FnMut(Vec<Ticks>) -> bool,
-    ) -> Result<(), MediaError> {
-        self.select_streams(&[stream]);
-        let mut packet = Packet::new()?;
-        let mut batch = Vec::new();
-        let mut since_report = 0usize;
-        while self.read(&mut packet)? {
-            since_report += 1;
-            if packet.is_keyframe()
-                && let Some(pts) = packet.pts()
-            {
-                batch.push(pts);
-            }
-            if since_report >= 2_000 {
-                since_report = 0;
-                if !report(std::mem::take(&mut batch)) {
-                    return Ok(());
-                }
-            }
-        }
-        report(batch);
-        Ok(())
-    }
 }

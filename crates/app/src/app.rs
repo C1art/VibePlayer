@@ -105,6 +105,7 @@ impl VibePlayerApp {
             video: VideoOptions {
                 hardware,
                 high_bit_depth: self.high_bit_depth.unwrap_or(false),
+                deinterlace: true,
             },
             volume: audio::Volume::from_percent(i32::from(self.settings.volume)),
             muted: self.settings.muted,

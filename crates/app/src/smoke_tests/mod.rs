@@ -49,6 +49,7 @@ pub(crate) fn options(autoplay: bool) -> PlayerOptions {
         video: VideoOptions {
             hardware: hardware(),
             high_bit_depth: true,
+            deinterlace: true,
         },
         volume: audio::Volume::from_percent(0),
         muted: true,

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use cut::{StreamIndex, Ticks, Timebase};
 
-use crate::ffi::{InputContext, Packet, StreamParams};
+use crate::ffi::{Discard, InputContext, Packet, StreamParams};
 use crate::{MediaError, MediaInfo, StreamKind};
 
 /// Reads packets from a file.
@@ -42,7 +42,12 @@ impl Demuxer {
     pub fn select_streams(&mut self, streams: &[StreamIndex]) {
         for index in 0..self.input.stream_count() {
             let index = StreamIndex(index);
-            self.input.set_discard(index, !streams.contains(&index));
+            let discard = if streams.contains(&index) {
+                Discard::Nothing
+            } else {
+                Discard::Everything
+            };
+            self.input.set_discard(index, discard);
         }
         self.selected = Some(streams.to_vec());
     }

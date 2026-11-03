@@ -14,6 +14,13 @@ use crate::{MediaError, StreamKind};
 
 use super::output::ChapterSpec;
 
+/// Which packets of a stream the demuxer skips.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Discard {
+    Nothing,
+    Everything,
+}
+
 /// An open input file.
 pub struct InputContext {
     ptr: NonNull<sys::AVFormatContext>,
@@ -190,20 +197,38 @@ impl InputContext {
         check(code, "avformat_seek_file").map(drop)
     }
 
-    /// Stops the demuxer from returning packets of a stream we don't use.
-    pub fn set_discard(&mut self, stream: StreamIndex, discard: bool) {
+    /// Tells the demuxer whether to skip a stream's packets. Not every demuxer honors it.
+    pub fn set_discard(&mut self, stream: StreamIndex, discard: Discard) {
         if stream.0 >= self.stream_count() {
             return;
         }
         // SAFETY: index checked above; we hold `&mut self`, so nobody else reads the stream.
         unsafe {
             let stream = *self.raw().streams.add(stream.0);
-            (*stream).discard = if discard {
-                sys::AVDiscard::AVDISCARD_ALL
-            } else {
-                sys::AVDiscard::AVDISCARD_DEFAULT
+            (*stream).discard = match discard {
+                Discard::Nothing => sys::AVDiscard::AVDISCARD_DEFAULT,
+                Discard::Everything => sys::AVDiscard::AVDISCARD_ALL,
             };
         }
+    }
+
+    /// Timestamps of the keyframes in the container's own index of `stream`, as stored there
+    /// (presentation time for Matroska cues, decode time for MP4).
+    pub fn indexed_keyframes(&self, stream: StreamIndex) -> Vec<Ticks> {
+        let Some(raw) = self.raw_stream(stream) else {
+            return Vec::new();
+        };
+        // SAFETY: `raw` is a stream of this open context; the index is only read here.
+        let count = unsafe { sys::avformat_index_get_entries_count(raw) };
+        (0..count)
+            .filter_map(|index| {
+                // SAFETY: `index` is below the entry count; the entry is copied out at once.
+                let entry =
+                    unsafe { sys::avformat_index_get_entry(raw.cast_mut(), index).as_ref() }?;
+                let keyframe = entry.flags() & sys::AVINDEX_KEYFRAME != 0;
+                keyframe.then_some(Ticks(entry.timestamp))
+            })
+            .collect()
     }
 
     pub(super) fn metadata_ptr(&self) -> *const sys::AVDictionary {

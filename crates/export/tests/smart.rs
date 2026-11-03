@@ -31,6 +31,7 @@ fn frames(path: &Path) -> (Vec<(f64, Vec<u8>)>, u64) {
     let options = VideoOptions {
         hardware: HardwareDecoding::Off,
         high_bit_depth: true,
+        deinterlace: false,
     };
     let mut decoder = VideoDecoder::new(demuxer.stream_params(stream).unwrap(), options).unwrap();
     let mut packet = Packet::new().unwrap();

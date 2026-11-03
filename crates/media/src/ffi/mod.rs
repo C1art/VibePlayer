@@ -21,7 +21,7 @@ use crate::MediaError;
 pub use codec::{CodecContext, HwDevice, Received};
 pub use filter::{FilterGraph, FilterMedia};
 pub use frame::{Frame, MasteringLuminance};
-pub use input::{CodecParams, InputContext, StreamRef};
+pub use input::{CodecParams, Discard, InputContext, StreamRef};
 pub use output::{ChapterSpec, OutputContext};
 pub use packet::Packet;
 pub use params::StreamParams;
