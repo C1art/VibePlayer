@@ -19,7 +19,7 @@ use crate::osd::Osd;
 use crate::session::Session;
 use crate::subtitles::SubtitleOverlay;
 use crate::window_state::WindowTracker;
-use crate::{chapters, diagnostics, shortcuts, theme, video_view, welcome};
+use crate::{chapters, diagnostics, shortcut_help, shortcuts, theme, video_view, welcome};
 
 /// Controls hide after the pointer rests this long during playback.
 const CONTROLS_IDLE: Duration = Duration::from_millis(2200);
@@ -383,7 +383,7 @@ impl eframe::App for VibePlayerApp {
             Some(_) => self.show_player(ui, area, &mut actions),
         };
         if self.help_open {
-            shortcuts::show_help(&ctx, &mut self.help_open);
+            shortcut_help::show(&ctx, &mut self.help_open);
         }
         let mut settings_changed = false;
         if self.settings_open {
