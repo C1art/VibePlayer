@@ -10,7 +10,7 @@ use super::{
     Packet, check, codec_name, dict, optional_ts, pixel_format_name, string_from, timebase,
 };
 use crate::color::ColorInfo;
-use crate::{MediaError, StreamKind};
+use crate::{MediaError, Rotation, StreamKind};
 
 use super::output::ChapterSpec;
 
@@ -396,6 +396,32 @@ impl<'a> CodecParams<'a> {
             self.raw.field_order,
             sys::AVFieldOrder::AV_FIELD_PROGRESSIVE | sys::AVFieldOrder::AV_FIELD_UNKNOWN
         )
+    }
+
+    /// The turn the stream's display matrix asks for, if it has one.
+    pub fn rotation(&self) -> Rotation {
+        let count = self.raw.nb_coded_side_data;
+        // SAFETY: `coded_side_data` holds `nb_coded_side_data` entries owned by the parameters;
+        // the lookup returns one of them or null.
+        let side_data = unsafe {
+            sys::av_packet_side_data_get(
+                self.raw.coded_side_data,
+                count,
+                sys::AVPacketSideDataType::AV_PKT_DATA_DISPLAYMATRIX,
+            )
+            .as_ref()
+        };
+        let Some(side_data) = side_data else {
+            return Rotation::None;
+        };
+        // A display matrix is nine 32-bit integers.
+        if side_data.data.is_null() || side_data.size < 9 * size_of::<i32>() {
+            return Rotation::None;
+        }
+        // SAFETY: the buffer is at least nine `i32`s long, checked above; FFmpeg allocates
+        // side data suitably aligned.
+        let degrees = unsafe { sys::av_display_rotation_get(side_data.data.cast::<i32>()) };
+        Rotation::from_counterclockwise_degrees(degrees)
     }
 
     pub fn color(&self) -> ColorInfo {

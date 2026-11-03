@@ -12,7 +12,7 @@ use crate::ffi::{
 use crate::gpu::GpuPicture;
 use crate::replay::ReplayBuffer;
 use crate::video_frame::{HardwareDecoding, PlaneLayout, VideoFrame, VideoOptions};
-use crate::{ColorInfo, ColorRange, Matrix, MediaError, Primaries};
+use crate::{ColorInfo, ColorRange, Matrix, MediaError, Primaries, Rotation};
 
 // NV12 and P010 are what hardware decoders download as; listing them avoids a CPU conversion.
 const EIGHT_BIT_FORMATS: &str = "nv12|yuv420p|yuv422p|yuv444p";
@@ -41,6 +41,7 @@ pub struct VideoDecoder {
     options: VideoOptions,
     stream_color: ColorInfo,
     stream_interlaced: bool,
+    rotation: Rotation,
     filter: Option<ActiveFilter>,
     /// A deinterlacing graph replaced mid-stream, still giving out the frame it held back.
     retiring: Option<ActiveFilter>,
@@ -67,6 +68,7 @@ impl VideoDecoder {
         Ok(VideoDecoder {
             stream_color: view.color(),
             stream_interlaced: view.is_interlaced(),
+            rotation: view.rotation(),
             params,
             codec,
             options,
@@ -315,6 +317,7 @@ impl VideoDecoder {
             layout,
             color,
             luminance: frame.mastering_luminance(),
+            rotation: self.rotation,
             frame,
             gpu,
         })

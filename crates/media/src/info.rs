@@ -68,6 +68,7 @@ pub struct VideoInfo {
     pub color: ColorInfo,
     pub interlaced: bool,
     pub sample_aspect_ratio: Option<(i32, i32)>,
+    pub rotation: crate::Rotation,
     /// Cover art rather than a real video stream.
     pub attached_picture: bool,
 }
@@ -139,6 +140,7 @@ fn stream_info(stream: &StreamRef<'_>) -> StreamInfo {
                 color: params.color(),
                 interlaced: params.is_interlaced(),
                 sample_aspect_ratio: params.sample_aspect_ratio(),
+                rotation: params.rotation(),
                 attached_picture: stream.is_attached_picture(),
             })
         }

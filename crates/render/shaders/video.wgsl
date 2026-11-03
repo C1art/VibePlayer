@@ -12,7 +12,7 @@ struct Params {
     // target expects linear values (sRGB format).
     misc: vec4<f32>,
     // x: 1 if colors need linear-light processing (HDR or wide gamut); y: 1 if U and V are
-    // interleaved in plane_u (NV12, P010).
+    // interleaved in plane_u (NV12, P010); z: clockwise quarter turns for display.
     flags: vec4<f32>,
     // x: 1 for scRGB on an HDR display; y: SDR white and z: display peak, in scRGB units.
     output: vec4<f32>,
@@ -35,7 +35,13 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
     let uv = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
     var out: VertexOutput;
     out.position = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
-    out.uv = uv;
+    // Where on the stored picture this point of the turned picture comes from.
+    switch u32(params.flags.z) {
+        case 1u: { out.uv = vec2<f32>(uv.y, 1.0 - uv.x); }
+        case 2u: { out.uv = vec2<f32>(1.0 - uv.x, 1.0 - uv.y); }
+        case 3u: { out.uv = vec2<f32>(1.0 - uv.y, uv.x); }
+        default: { out.uv = uv; }
+    }
     return out;
 }
 
