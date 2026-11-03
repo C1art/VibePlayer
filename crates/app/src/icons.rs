@@ -11,6 +11,9 @@ pub enum Icon {
     StepForward,
     SkipBack,
     SkipForward,
+    /// Ten seconds back or forward.
+    SeekBack,
+    SeekForward,
     Volume,
     VolumeLow,
     Muted,
@@ -71,6 +74,34 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
                     color,
                 );
             }
+        }
+        Icon::SeekBack | Icon::SeekForward => {
+            // A circular arrow around the number of seconds, open at the top on the side the
+            // arrow points away from.
+            use std::f32::consts::{FRAC_PI_2, PI};
+            let flip = if icon == Icon::SeekBack { 1.0 } else { -1.0 };
+            let (from, to) = if icon == Icon::SeekBack {
+                (-FRAC_PI_2, PI)
+            } else {
+                (0.0, 1.5 * PI)
+            };
+            arc(painter, c, s * 0.85, from, to, stroke);
+            triangle(
+                painter,
+                [
+                    p(-0.42 * flip, -0.85),
+                    p(0.05 * flip, -1.2),
+                    p(0.05 * flip, -0.5),
+                ],
+                color,
+            );
+            painter.text(
+                p(0.0, 0.06),
+                eframe::egui::Align2::CENTER_CENTER,
+                "10",
+                eframe::egui::FontId::proportional(s * 0.85),
+                color,
+            );
         }
         Icon::Volume | Icon::VolumeLow | Icon::Muted => {
             speaker(painter, &p, color);

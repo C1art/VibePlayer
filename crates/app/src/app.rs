@@ -413,7 +413,9 @@ impl eframe::App for VibePlayerApp {
             ctx.request_repaint_after(Duration::from_millis(30));
         }
         let hide_cursor = self.session.is_some()
-            && self.fullscreen
+            && self.editor.is_none()
+            && !self.help_open
+            && !self.settings_open
             && !self.controls_visible(&ctx, over_controls);
         if hide_cursor {
             ctx.set_cursor_icon(CursorIcon::None);

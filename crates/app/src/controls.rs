@@ -85,10 +85,10 @@ pub fn show(
         if icon_button(ui, play_icon, 40.0, "Play / pause (Space)").clicked() {
             actions.push(Action::TogglePlay);
         }
-        if icon_button(ui, Icon::SkipBack, 34.0, "Back 10 s (J)").clicked() {
+        if icon_button(ui, Icon::SeekBack, 36.0, "Back 10 s (J)").clicked() {
             actions.push(Action::SeekBy { seconds: -10 });
         }
-        if icon_button(ui, Icon::SkipForward, 34.0, "Forward 10 s (L)").clicked() {
+        if icon_button(ui, Icon::SeekForward, 36.0, "Forward 10 s (L)").clicked() {
             actions.push(Action::SeekBy { seconds: 10 });
         }
         ui.add_space(6.0);
