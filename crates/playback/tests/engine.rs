@@ -162,3 +162,37 @@ fn stepping_back_from_a_keyframe_reaches_the_previous_gop() {
         p.current_frame().is_some_and(|f| f.pts == Ticks(1_960_000))
     });
 }
+
+#[test]
+#[ignore]
+fn a_keyframe_seek_puts_the_clock_on_the_keyframe_it_shows() {
+    let mut player = Player::open(fixture("h264_bframes.mp4"), options(false), Instant::now());
+    run_until(&mut player, Duration::from_secs(5), |p| {
+        p.current_frame().is_some()
+    });
+    player.seek(Ticks(2_600_000), SeekMode::Keyframe);
+    run_until(&mut player, Duration::from_secs(5), |p| !p.is_seeking());
+    assert_eq!(player.position(), Ticks(2_000_000));
+    assert_eq!(
+        player.current_frame().map(|f| f.pts),
+        Some(Ticks(2_000_000))
+    );
+}
+
+#[test]
+#[ignore]
+fn quick_step_backs_each_move_one_frame() {
+    let mut player = Player::open(fixture("h264_bframes.mp4"), options(false), Instant::now());
+    run_until(&mut player, Duration::from_secs(5), |p| {
+        p.current_frame().is_some()
+    });
+    player.seek(Ticks(2_480_000), SeekMode::Exact);
+    run_until(&mut player, Duration::from_secs(5), |p| !p.is_seeking());
+    // Three presses before the first has finished decoding.
+    for _ in 0..3 {
+        player.step_backward(Instant::now());
+    }
+    run_until(&mut player, Duration::from_secs(5), |p| {
+        !p.is_seeking() && p.current_frame().map(|f| f.pts) == Some(Ticks(2_360_000))
+    });
+}

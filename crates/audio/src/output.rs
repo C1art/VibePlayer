@@ -181,7 +181,18 @@ where
                     .latency_micros
                     .store(latency.as_micros() as u64, Ordering::Relaxed);
             },
-            move |_error| error_shared.device_lost.store(true, Ordering::Relaxed),
+            move |error: cpal::Error| {
+                // Underruns and reroutes leave the stream playing; anything else ends it.
+                let recoverable = matches!(
+                    error.kind(),
+                    cpal::ErrorKind::Xrun
+                        | cpal::ErrorKind::DeviceChanged
+                        | cpal::ErrorKind::RealtimeDenied
+                );
+                if !recoverable {
+                    error_shared.device_lost.store(true, Ordering::Relaxed);
+                }
+            },
             None,
         )
         .map_err(|e| AudioError::Device(e.to_string()))

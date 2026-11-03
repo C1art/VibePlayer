@@ -8,14 +8,15 @@ use cut::{SampleRate, Ticks, Timebase};
 use media::{AudioDecoder, AudioEffects, AudioFrame, AudioTarget, StreamParams};
 
 use crate::messages::{Event, PacketMessage, Shared};
-use crate::{AudioAnchor, Generation};
+use crate::{AnchorPair, AudioAnchor, Generation};
 
 /// How far ahead of the device we decode. Short, so EQ and speed changes are heard quickly.
 const QUEUE_AHEAD_MICROS: i64 = 200_000;
 /// How often to try reopening a lost output device.
 const DEVICE_RETRY: Duration = Duration::from_secs(1);
-/// A timestamp jump bigger than this starts a new anchor.
-const DISCONTINUITY_MICROS: i64 = 200_000;
+/// A timestamp jump bigger than this starts a new anchor. Small, so a few dropped packets
+/// don't add up to drift; well above the rounding of container timestamps.
+const DISCONTINUITY_MICROS: i64 = 10_000;
 
 pub(crate) struct Setup {
     pub params: Option<StreamParams>,
@@ -57,6 +58,8 @@ struct Sink {
     generation: Generation,
     exact_target: Option<Ticks>,
     anchored: Option<Anchored>,
+    /// The anchor before the current one, for samples still queued when it was replaced.
+    previous_anchor: Option<AudioAnchor>,
 }
 
 fn run(setup: Setup) {
@@ -87,6 +90,7 @@ fn run(setup: Setup) {
             generation: Generation::default(),
             exact_target: None,
             anchored: None,
+            previous_anchor: None,
         },
     };
     worker.set_stream(setup.params);
@@ -110,6 +114,7 @@ fn run(setup: Setup) {
                 sink.exact_target = exact_target;
                 sink.control.clear();
                 sink.anchored = None;
+                sink.previous_anchor = None;
                 sink.shared.audio_anchor.store(None);
                 if let Some(decoder) = &mut worker.decoder {
                     decoder.flush();
@@ -140,6 +145,10 @@ impl Worker {
             .and_then(|p| p.try_clone().ok())
             .and_then(|p| AudioDecoder::new(p, self.target.clone(), effects).ok());
         self.sink.anchored = None;
+        self.sink.previous_anchor = None;
+        // Without a decoder no anchor will come; the player must not wait for one.
+        let available = self.decoder.is_some();
+        let _ = self.events.send(Event::AudioDecoder { available });
     }
 
     /// Reopens the default device after the current one disappeared (e.g. headphones
@@ -207,6 +216,11 @@ impl Sink {
             self.exact_target = None;
         }
         let frames = (samples.len() / channels) as u64;
+        if self.control.is_device_lost() {
+            // Keep to real time while there's no device, so the file isn't raced through.
+            self.wait_out(self.control.frames_to_micros(frames));
+            return true;
+        }
         self.anchor_if_needed(pts, speed);
         let mut remaining = samples;
         while !remaining.is_empty() {
@@ -257,12 +271,26 @@ impl Sink {
             pts,
             speed,
         };
-        self.shared.audio_anchor.store(Some(anchor));
+        self.previous_anchor = self.anchored.as_ref().map(|current| current.anchor);
+        self.shared.audio_anchor.store(Some(AnchorPair {
+            current: anchor,
+            previous: self.previous_anchor,
+        }));
         self.anchored = Some(Anchored {
             anchor,
             pushed_frames: 0,
             expected_pts: pts,
         });
+    }
+}
+
+impl Sink {
+    /// Sleeps for `wall` microseconds, waking early for a seek.
+    fn wait_out(&self, wall: Ticks) {
+        let deadline = Instant::now() + Duration::from_micros(u64::try_from(wall.0).unwrap_or(0));
+        while Instant::now() < deadline && !self.shared.is_stale(self.generation) {
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 }
 

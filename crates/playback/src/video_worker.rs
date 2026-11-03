@@ -2,12 +2,15 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crossbeam::channel::{Receiver, SendTimeoutError, Sender};
+use crossbeam::channel::{Receiver, RecvTimeoutError, SendTimeoutError, Sender};
 use cut::Ticks;
 use media::{StreamParams, VideoDecoder, VideoFrame, VideoOptions};
 
 use crate::Generation;
 use crate::messages::{DecodedVideo, Event, PacketMessage, Shared};
+
+/// How long without packets before an exact seek settles for the frame it holds.
+const STALL: Duration = Duration::from_millis(150);
 
 pub(crate) struct Setup {
     pub params: StreamParams,
@@ -50,7 +53,7 @@ fn run(setup: Setup) {
     let decoder = match VideoDecoder::new(setup.params, setup.options) {
         Ok(decoder) => decoder,
         Err(error) => {
-            let _ = setup.events.send(Event::Failed(error.into()));
+            let _ = setup.events.send(Event::VideoFailed(error.into()));
             return;
         }
     };
@@ -64,10 +67,20 @@ fn run(setup: Setup) {
         generation: Generation::default(),
         exact: None,
     };
-    for message in setup.packets {
+    loop {
         if worker.shared.should_quit() {
             return;
         }
+        let message = match setup.packets.recv_timeout(STALL) {
+            Ok(message) => message,
+            Err(RecvTimeoutError::Timeout) => {
+                // Nothing more is coming for now (the reader may be held up by a full audio
+                // queue while paused), so the frame held for an exact seek is the best there is.
+                worker.release_held();
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => return,
+        };
         let flow = match message {
             PacketMessage::Packet(generation, packet) => {
                 if worker.shared.is_stale(generation) || generation != worker.generation {
@@ -129,6 +142,16 @@ impl Worker {
             };
             frame.pts = frame.pts - self.start_time;
             let ready = match &mut self.exact {
+                // A frame that lasts past the target is the one to show; no need to wait for
+                // the next, which may be far off in a variable frame rate file.
+                Some(exact)
+                    if frame.pts <= exact.target
+                        && frame.duration.0 > 0
+                        && frame.pts + frame.duration > exact.target =>
+                {
+                    self.exact = None;
+                    frame
+                }
                 Some(exact) if frame.pts <= exact.target => {
                     exact.held = Some(frame);
                     continue;

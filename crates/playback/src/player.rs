@@ -10,7 +10,9 @@ use media::{AudioEffects, Decibels, Equalizer, Speed, Subtitle, VideoFrame, Vide
 use crate::messages::{Command, DecodedVideo, Event, Opened, Shared};
 use crate::reader::{self, ReaderSetup};
 use crate::subtitle_list::SubtitleList;
-use crate::{AudioReading, Clock, FrameQueue, Generation, PlaybackError, Shown};
+use crate::{Clock, FrameQueue, Generation, PlaybackError, Shown};
+
+mod events;
 
 /// Decoded frames the video thread may get ahead of the screen.
 const FRAMES_AHEAD: usize = 4;
@@ -67,6 +69,17 @@ pub struct Player {
     audio_ended: bool,
     audio: Option<AudioControl>,
     audio_error: Option<PlaybackError>,
+    /// Whether the selected audio stream has a working decoder.
+    audio_decodable: bool,
+    /// The video decoder failed before the file was reported open.
+    video_failed: Option<PlaybackError>,
+    /// The pending seek shows the keyframe before its target, so the clock goes there.
+    keyframe_seek: bool,
+    /// Step-backs pressed while the previous one was still decoding.
+    queued_steps_back: u32,
+    stepping_back: bool,
+    /// Frames were stepped forward while paused; audio is still where it was.
+    stepped_forward: bool,
     hardware_decoding: Option<bool>,
     volume: Volume,
     muted: bool,
@@ -115,6 +128,12 @@ impl Player {
             audio_ended: false,
             audio: None,
             audio_error: None,
+            audio_decodable: true,
+            video_failed: None,
+            keyframe_seek: false,
+            queued_steps_back: 0,
+            stepping_back: false,
+            stepped_forward: false,
             hardware_decoding: None,
             volume: options.volume,
             muted: options.muted,
@@ -201,10 +220,7 @@ impl Player {
         self.receive_frames();
         let audio = self.audio_reading();
         if self.waiting_for_media && self.media_ready(audio.is_some()) {
-            self.waiting_for_media = false;
-            if self.playing {
-                self.clock.play(now);
-            }
+            self.media_arrived(now);
         }
         let position = self.clock.tick(now, audio);
         let shown = if self.waiting_for_media || !self.playing {
@@ -215,6 +231,7 @@ impl Player {
         if let Shown::NewFrame { dropped } = shown {
             self.dropped_frames += dropped as u64;
         }
+        self.continue_stepping_back(now);
         self.detect_end(now);
         Update {
             frame_changed: shown != Shown::Unchanged,
@@ -222,52 +239,30 @@ impl Player {
         }
     }
 
-    fn receive_events(&mut self, now: Instant) {
-        while let Ok(event) = self.events.try_recv() {
-            match event {
-                Event::Opened(opened) => self.on_opened(opened, now),
-                Event::Failed(error) => {
-                    if matches!(self.state, LoadState::Loading) {
-                        self.state = LoadState::Failed(error);
-                    }
-                }
-                Event::VideoDecoder { hardware } => self.hardware_decoding = Some(hardware),
-                Event::AudioReady(control) => {
-                    control.set_volume(self.volume, self.muted);
-                    control.set_paused(!self.playing);
-                    self.audio = Some(control);
-                }
-                Event::AudioFailed(error) => self.audio_error = Some(error),
-                Event::Subtitle(generation, subtitle) => {
-                    if generation == self.generation {
-                        self.subtitles.add(subtitle);
-                    }
-                }
-                Event::VideoEnded(generation) => self.video_ended |= generation == self.generation,
-                Event::AudioEnded(generation) => self.audio_ended |= generation == self.generation,
+    fn media_arrived(&mut self, now: Instant) {
+        self.waiting_for_media = false;
+        if std::mem::take(&mut self.keyframe_seek)
+            && let Some(keyframe) = self.queue.next_pts()
+        {
+            // Audio starts at the keyframe too; a clock at the target would wait for it.
+            self.clock.jump(now, keyframe);
+        }
+        if self.playing {
+            self.clock.play(now);
+            if let Some(audio) = &self.audio {
+                audio.set_paused(false);
             }
         }
     }
 
-    fn on_opened(&mut self, opened: Box<Opened>, now: Instant) {
-        self.state = LoadState::Ready(opened);
-        if let Some(start) = self.pending_start.take() {
-            let within = self.duration().is_none_or(|d| start < d - Ticks(5_000_000));
-            if within {
-                self.seek_at(now, start, SeekMode::Exact);
-            }
+    /// Takes the next queued step back once the previous one's frame is on screen.
+    fn continue_stepping_back(&mut self, now: Instant) {
+        if self.waiting_for_media || self.queued_steps_back == 0 {
+            return;
         }
-    }
-
-    fn receive_frames(&mut self) {
-        while self.queue.pending() < FRAMES_AHEAD {
-            match self.frames.try_recv() {
-                Ok(decoded) => {
-                    self.queue.push(decoded.generation, decoded.frame);
-                }
-                Err(_) => break,
-            }
-        }
+        let remaining = self.queued_steps_back - 1;
+        self.step_backward(now);
+        self.queued_steps_back = remaining;
     }
 
     fn has_video(&self) -> bool {
@@ -275,60 +270,9 @@ impl Player {
     }
 
     fn has_audio(&self) -> bool {
-        self.opened().is_some_and(|o| o.audio.is_some()) && self.audio_error.is_none()
-    }
-
-    fn audio_reading(&self) -> Option<AudioReading> {
-        let control = self.audio.as_ref()?;
-        if !self.has_audio() || control.is_device_lost() {
-            return None;
-        }
-        if self.audio_ended && control.queued_frames() == 0 {
-            return None;
-        }
-        let anchor = self.shared.audio_anchor.load()?;
-        (anchor.generation == self.generation).then(|| AudioReading {
-            anchor,
-            played_frames: control.played_frames(),
-            latency: control.latency(),
-            sample_rate: control.format().sample_rate,
-        })
-    }
-
-    fn media_ready(&self, audio_anchored: bool) -> bool {
-        if self.opened().is_none() {
-            return false;
-        }
-        let video_ready = !self.has_video()
-            || !self.queue.is_awaiting_first()
-            || self.queue.pending() > 0
-            || self.video_ended;
-        let audio_ready = !self.has_audio()
-            || audio_anchored
-            || self.audio_ended
-            || (self.audio.is_none() && self.audio_error.is_none() && !self.has_video());
-        video_ready && (audio_ready || !self.playing)
-    }
-
-    fn detect_end(&mut self, now: Instant) {
-        if self.ended || self.waiting_for_media || !self.playing || self.opened().is_none() {
-            return;
-        }
-        let video_done = !self.has_video() || (self.video_ended && self.queue.pending() == 0);
-        // A device that vanished never drains its queue, so it can't hold up the end.
-        let audio_drained =
-            |audio: &AudioControl| audio.queued_frames() == 0 || audio.is_device_lost();
-        let audio_done = !self.has_audio()
-            || (self.audio_ended && self.audio.as_ref().is_none_or(audio_drained));
-        let past_end = self
-            .duration()
-            .is_some_and(|d| self.position() > d + Ticks(1_000_000));
-        if video_done && (audio_done || past_end) {
-            self.ended = true;
-            self.pause();
-            let end = self.duration().unwrap_or(self.position());
-            self.clock.jump(now, end);
-        }
+        self.opened().is_some_and(|o| o.audio.is_some())
+            && self.audio_error.is_none()
+            && self.audio_decodable
     }
 
     fn repaint_after(&self, position: Ticks) -> Option<Duration> {
@@ -353,13 +297,17 @@ impl Player {
     pub fn play(&mut self, now: Instant) {
         if self.ended {
             self.seek_at(now, Ticks::ZERO, SeekMode::Exact);
+        } else if self.stepped_forward {
+            // Bring the audio to the stepped-to frame rather than hold the picture until the
+            // audio catches up.
+            self.seek_at(now, self.position(), SeekMode::Exact);
         }
         self.playing = true;
         if !self.waiting_for_media {
             self.clock.play(now);
-        }
-        if let Some(audio) = &self.audio {
-            audio.set_paused(false);
+            if let Some(audio) = &self.audio {
+                audio.set_paused(false);
+            }
         }
     }
 
@@ -396,9 +344,15 @@ impl Player {
         self.audio_ended = false;
         self.ended = false;
         self.waiting_for_media = true;
+        self.keyframe_seek = mode == SeekMode::Keyframe;
+        self.queued_steps_back = 0;
+        self.stepping_back = false;
+        self.stepped_forward = false;
         self.clock.pause();
         self.clock.jump(now, target);
         if let Some(audio) = &self.audio {
+            // Silent until the picture is ready too.
+            audio.set_paused(true);
             audio.clear();
         }
         let _ = self.commands.send(Command::Seek {
@@ -421,15 +375,22 @@ impl Player {
         {
             let pts = frame.pts;
             self.clock.jump(now, pts);
+            self.stepped_forward = true;
         }
     }
 
     /// Pauses and shows the previous frame, decoding again from the prior keyframe.
     pub fn step_backward(&mut self, now: Instant) {
         self.pause();
+        if self.waiting_for_media && self.stepping_back {
+            // Until that frame arrives the one before it isn't known; step again after.
+            self.queued_steps_back += 1;
+            return;
+        }
         let current = self.queue.current().map_or(self.position(), |f| f.pts);
         if current > Ticks::ZERO {
             self.seek_at(now, current - Ticks(1), SeekMode::Exact);
+            self.stepping_back = true;
         }
     }
 
