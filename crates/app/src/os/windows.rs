@@ -34,7 +34,7 @@ const VIDEO_PATTERNS: &str = "*.mp4;*.m4v;*.mkv;*.webm;*.mov;*.avi;*.wmv;*.ts;*.
 
 /// The app's own top-level window, found among this thread's windows (winit creates it on
 /// the main thread, which is the one calling this).
-fn main_window() -> Option<HWND> {
+pub(super) fn main_window() -> Option<HWND> {
     unsafe extern "system" fn visit(window: HWND, found: LPARAM) -> BOOL {
         // SAFETY: `found` is the address of the `Option<HWND>` below, alive for the whole
         // enumeration; the window handle comes from the system.

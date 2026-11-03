@@ -53,6 +53,11 @@ impl Updates {
         }
     }
 
+    /// How far the installer download has come, while one runs.
+    pub fn download_progress(&self) -> Option<f32> {
+        self.download.as_ref().map(fraction_of)
+    }
+
     pub fn is_busy(&self) -> bool {
         self.check.is_some() || self.download.is_some()
     }
@@ -143,8 +148,7 @@ impl Updates {
                 }
                 ui.add_space(6.0);
                 if let Some(download) = &self.download {
-                    let (received, total) = download.progress();
-                    let fraction = total.map_or(0.0, |t| received as f32 / t.max(1) as f32);
+                    let fraction = fraction_of(download);
                     ui.add(egui::ProgressBar::new(fraction).text("Downloading…"));
                     if crate::widgets::button(ui, crate::widgets::Kind::Secondary, None, "Cancel")
                         .clicked()
@@ -180,6 +184,11 @@ impl Updates {
             });
         changed
     }
+}
+
+fn fraction_of(download: &Download) -> f32 {
+    let (received, total) = download.progress();
+    total.map_or(0.0, |total| received as f32 / total.max(1) as f32)
 }
 
 fn describe(error: &UpdateError) -> String {

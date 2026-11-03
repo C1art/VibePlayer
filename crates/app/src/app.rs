@@ -14,7 +14,7 @@ use crate::actions::Action;
 use crate::controls::{self, ControlsState};
 use crate::editor::{self, Editor};
 use crate::info_panel::{self, PlaybackStats};
-use crate::os::{MediaControls, NowPlaying, PendingDialog};
+use crate::os::{MediaControls, NowPlaying, PendingDialog, Taskbar, TaskbarState};
 use crate::osd::Osd;
 use crate::session::Session;
 use crate::subtitles::SubtitleOverlay;
@@ -46,6 +46,7 @@ pub struct VibePlayerApp {
     pub(crate) subtitles: SubtitleOverlay,
     pub(crate) open_dialog: Option<PendingDialog>,
     pub(crate) media_controls: MediaControls,
+    taskbar: Taskbar,
     pub(crate) fullscreen: bool,
     pub(crate) editor: Option<Editor>,
     /// Files sent by later launches of the app.
@@ -85,6 +86,7 @@ impl VibePlayerApp {
             subtitles: SubtitleOverlay::default(),
             open_dialog: None,
             media_controls: MediaControls::new(creation),
+            taskbar: Taskbar::new(&creation.egui_ctx),
             fullscreen: false,
             editor: None,
             instance_requests,
@@ -273,6 +275,7 @@ impl eframe::App for VibePlayerApp {
             self.high_bit_depth = frame.wgpu_render_state().map(video_view::install);
         }
         let mut actions = self.media_controls.poll();
+        actions.extend(self.taskbar.poll());
         let input_activity = ctx.input(|input| {
             input.pointer.delta() != egui::Vec2::ZERO
                 || input.pointer.any_down()
@@ -539,6 +542,15 @@ impl VibePlayerApp {
                 title,
                 playing: *playing,
             }));
+        let export = self
+            .editor
+            .as_ref()
+            .filter(|editor| editor.is_exporting())
+            .map(Editor::export_fraction);
+        self.taskbar.update(TaskbarState {
+            playing: now_playing.map(|(_, playing)| playing),
+            progress: export.or(self.updates.download_progress()),
+        });
     }
 }
 

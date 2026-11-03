@@ -6,7 +6,12 @@ use crossbeam::channel::Receiver;
 
 use crate::actions::Action;
 
+// Drawn for the Windows taskbar; tested everywhere.
+#[cfg_attr(not(windows), allow(dead_code))]
+mod glyphs;
 pub mod single_instance;
+#[cfg(windows)]
+mod taskbar;
 #[cfg(windows)]
 mod windows;
 
@@ -51,6 +56,56 @@ pub fn save_file_dialog(suggested: &std::path::Path) -> Option<PendingDialog> {
 pub struct MediaControls {
     #[cfg(windows)]
     inner: Option<windows::MediaControls>,
+}
+
+/// What the taskbar button should show.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TaskbarState {
+    /// `Some(playing)` while a file is open, for the thumbnail buttons.
+    pub playing: Option<bool>,
+    /// Export or download progress, 0–1.
+    pub progress: Option<f32>,
+}
+
+/// The taskbar button's thumbnail toolbar and progress bar (Windows only).
+pub struct Taskbar {
+    #[cfg(windows)]
+    inner: taskbar::Taskbar,
+}
+
+impl Taskbar {
+    pub fn new(repaint: &eframe::egui::Context) -> Taskbar {
+        #[cfg(windows)]
+        {
+            Taskbar {
+                inner: taskbar::Taskbar::new(repaint.clone()),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = repaint;
+            Taskbar {}
+        }
+    }
+
+    /// Thumbnail button presses since the last call.
+    pub fn poll(&mut self) -> Vec<Action> {
+        #[cfg(windows)]
+        {
+            self.inner.poll()
+        }
+        #[cfg(not(windows))]
+        {
+            Vec::new()
+        }
+    }
+
+    pub fn update(&mut self, state: TaskbarState) {
+        #[cfg(windows)]
+        self.inner.update(state);
+        #[cfg(not(windows))]
+        let _ = state;
+    }
 }
 
 /// What the media controls should currently display.
