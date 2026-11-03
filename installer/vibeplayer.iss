@@ -61,6 +61,7 @@ Root: HKA; Subkey: "Software\Classes\{#ProgId}\DefaultIcon"; ValueType: string; 
 Root: HKA; Subkey: "Software\Classes\{#ProgId}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}"" ""%1"""
 ; VibePlayer points its videos' icon at the chosen color theme with a per-user override.
 Root: HKCU; Subkey: "Software\Classes\{#ProgId}\DefaultIcon"; Flags: uninsdeletekey dontcreatekey
+Root: HKCU; Subkey: "Software\Classes\{#ProgId}"; ValueType: none; ValueName: "TypeOverlay"; Flags: uninsdeletevalue dontcreatekey
 
 ; Lists VibePlayer in Settings > Default apps so the user can make it the default.
 Root: HKA; Subkey: "Software\{#AppName}"; Flags: uninsdeletekey

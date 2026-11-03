@@ -28,8 +28,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{GUID, Interface, PCWSTR, w};
 
-const PROG_ID: PCWSTR = w!("VibePlayer.Video\\DefaultIcon");
-const USER_PROG_ID: PCWSTR = w!("Software\\Classes\\VibePlayer.Video\\DefaultIcon");
+const PROG_ID: PCWSTR = w!("VibePlayer.Video");
+const USER_PROG_ID: PCWSTR = w!("Software\\Classes\\VibePlayer.Video");
+const DEFAULT_ICON: PCWSTR = w!("VibePlayer.Video\\DefaultIcon");
+const USER_DEFAULT_ICON: PCWSTR = w!("Software\\Classes\\VibePlayer.Video\\DefaultIcon");
+/// The badge Explorer draws in the corner of a video's thumbnail. Without it Explorer uses the
+/// exe's first icon, whatever the theme.
+const TYPE_OVERLAY: PCWSTR = w!("TypeOverlay");
 
 fn resource_id(theme: ColorTheme) -> u16 {
     let index = ColorTheme::ALL
@@ -93,19 +98,31 @@ fn update_shell(id: u16) {
     }
 }
 
-/// The icon videos opened with VibePlayer show, if the installer registered them.
+/// The icon of videos VibePlayer opens, and the badge on their thumbnails, if the installer
+/// registered them. Returns whether anything changed.
 fn set_file_icon(location: &str) -> bool {
-    let current = read_string(HKEY_CLASSES_ROOT, PROG_ID);
-    if current.as_deref().is_none_or(|value| value == location) {
+    // Not installed (a development build): leave the registry alone.
+    if read_string(HKEY_CLASSES_ROOT, DEFAULT_ICON, PCWSTR::null()).is_none() {
         return false;
     }
-    let data: Vec<u16> = location.encode_utf16().chain([0]).collect();
+    let icon = set_string(DEFAULT_ICON, USER_DEFAULT_ICON, PCWSTR::null(), location);
+    let badge = set_string(PROG_ID, USER_PROG_ID, TYPE_OVERLAY, location);
+    icon || badge
+}
+
+/// Writes `value` under the user's `user_key` unless the merged view at `key` already has
+/// it. Returns whether it wrote.
+fn set_string(key: PCWSTR, user_key: PCWSTR, name: PCWSTR, value: &str) -> bool {
+    if read_string(HKEY_CLASSES_ROOT, key, name).as_deref() == Some(value) {
+        return false;
+    }
+    let data: Vec<u16> = value.encode_utf16().chain([0]).collect();
     // SAFETY: `data` is a NUL-terminated wide string, and its byte length is passed with it.
     unsafe {
         RegSetKeyValueW(
             HKEY_CURRENT_USER,
-            USER_PROG_ID,
-            PCWSTR::null(),
+            user_key,
+            name,
             REG_SZ.0,
             Some(data.as_ptr().cast()),
             u32::try_from(data.len() * 2).unwrap_or(0),
@@ -114,7 +131,11 @@ fn set_file_icon(location: &str) -> bool {
     .is_ok()
 }
 
-fn read_string(root: windows::Win32::System::Registry::HKEY, key: PCWSTR) -> Option<String> {
+fn read_string(
+    root: windows::Win32::System::Registry::HKEY,
+    key: PCWSTR,
+    name: PCWSTR,
+) -> Option<String> {
     let mut buffer = [0u16; 1024];
     let mut size = u32::try_from(buffer.len() * 2).ok()?;
     // SAFETY: the buffer and its size in bytes are passed together.
@@ -122,7 +143,7 @@ fn read_string(root: windows::Win32::System::Registry::HKEY, key: PCWSTR) -> Opt
         RegGetValueW(
             root,
             key,
-            PCWSTR::null(),
+            name,
             RRF_RT_REG_SZ,
             None,
             Some(buffer.as_mut_ptr().cast()),
