@@ -47,6 +47,7 @@ pub enum Action {
     CycleAudio,
     CycleSubtitles,
     CloseFile,
+    ClearRecents,
     Editor(crate::editor::EditorAction),
 }
 

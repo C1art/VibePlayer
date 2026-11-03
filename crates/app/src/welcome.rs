@@ -57,7 +57,14 @@ pub fn show(
             if !recents.is_empty() {
                 ui.add_space(30.0);
                 ui.allocate_ui_with_layout(vec2(420.0, 0.0), Layout::top_down(Align::Min), |ui| {
-                    widgets::section_title(ui, "Recent");
+                    ui.horizontal(|ui| {
+                        widgets::section_title(ui, "Recent");
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if text_link(ui, "Clear history").clicked() {
+                                actions.push(Action::ClearRecents);
+                            }
+                        });
+                    });
                     for recent in recents.iter().take(6) {
                         if recent_row(ui, recent).clicked() {
                             actions.push(Action::Open(PathBuf::from(&recent.path)));
@@ -103,4 +110,22 @@ fn recent_row(ui: &mut egui::Ui, recent: &RecentFile) -> egui::Response {
         theme::TEXT_DIM,
     );
     response.on_hover_text(recent.path.display().to_string())
+}
+
+/// A small dim text button that brightens on hover.
+fn text_link(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        egui::FontId::proportional(12.0),
+        egui::Color32::PLACEHOLDER,
+    );
+    let (rect, response) = ui.allocate_exact_size(galley.size(), Sense::click());
+    let color = if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        theme::TEXT
+    } else {
+        theme::TEXT_DIM
+    };
+    ui.painter().galley(rect.min, galley, color);
+    response
 }

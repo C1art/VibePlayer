@@ -34,6 +34,10 @@ impl VibePlayerApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Title("VibePlayer".into()));
                 }
             }
+            Action::ClearRecents => {
+                self.history.clear_watch_history();
+                self.save_history();
+            }
             Action::ToggleFullscreen => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!self.fullscreen));
             }
@@ -168,6 +172,7 @@ impl VibePlayerApp {
             Action::ShowOpenDialog
             | Action::Open(_)
             | Action::CloseFile
+            | Action::ClearRecents
             | Action::ToggleFullscreen
             | Action::ExitFullscreen
             | Action::ToggleInfo

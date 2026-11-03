@@ -145,6 +145,9 @@ pub fn show(
             if icon_button(ui, Icon::Folder, 34.0, "Open file (Ctrl + O)").clicked() {
                 actions.push(Action::ShowOpenDialog);
             }
+            if icon_button(ui, Icon::Close, 34.0, "Close file (Ctrl + W)").clicked() {
+                actions.push(Action::CloseFile);
+            }
             tracks_menu(ui, state, actions);
             let speed = format!("{}×", format_speed(state.speed));
             let response = pill_button(ui, &speed, "Playback speed ([ / ])");
