@@ -471,7 +471,7 @@ impl VibePlayerApp {
         };
         // Only the picture takes clicks: blank parts of the panels below must not toggle play.
         let panel_height = if self.editor.is_some() {
-            editor::HEIGHT
+            editor::height(area.width())
         } else if visible {
             controls::HEIGHT
         } else {
@@ -503,7 +503,7 @@ impl VibePlayerApp {
         let area = if self.editor.is_some() {
             Rect::from_min_max(
                 area.min,
-                egui::pos2(area.right(), area.bottom() - editor::HEIGHT),
+                egui::pos2(area.right(), area.bottom() - editor::height(area.width())),
             )
         } else {
             area
