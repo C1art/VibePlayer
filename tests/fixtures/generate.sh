@@ -53,6 +53,24 @@ ff -f lavfi -i "$video:duration=2" \
 ff -f lavfi -i "color=c=red:size=160x90:rate=25:duration=0.12" -c:v rawvideo -pix_fmt nv12 red_nv12.mkv
 ff -f lavfi -i "color=c=red:size=160x90:rate=25:duration=0.12" -c:v rawvideo -pix_fmt yuv420p red_yuv420p.mkv
 
+# Cover art: an attached PNG picture next to the video, as downloaded videos often have.
+ff -f lavfi -i "color=c=blue:size=64x64" -frames:v 1 cover.png
+ff -f lavfi -i "$video:duration=2" -i cover.png -map 0 -map 1 \
+  -c:v:0 libx264 -preset veryfast -crf 32 -g 25 -pix_fmt yuv420p -c:v:1 png -disposition:v:1 attached_pic \
+  cover_art.mp4
+rm cover.png
+
+# The general fixture in MPEG-TS, whose demuxer seeks by decode time.
+ff -i h264_bframes.mp4 -c copy -f mpegts h264_bframes.ts
+
+# Audio that ends three seconds in, while the video goes on to twenty.
+ff -f lavfi -i "testsrc2=size=160x90:rate=25:duration=20" -f lavfi -i "$tone:duration=3" \
+  -c:v libx264 -preset veryfast -crf 36 -pix_fmt yuv420p -g 50 -c:a aac -b:a 48k short_audio.mp4
+
+# Audio that only starts four seconds in.
+ff -f lavfi -i "testsrc2=size=160x90:rate=25:duration=8" -itsoffset 4 -f lavfi -i "$tone:duration=4" \
+  -map 0 -map 1 -c:v libx264 -preset veryfast -crf 36 -pix_fmt yuv420p -g 50 -c:a aac -b:a 48k late_audio.mp4
+
 # Truncated: the general fixture cut off partway through its media data.
 head -c 40000 h264_bframes.mp4 > truncated.mp4
 

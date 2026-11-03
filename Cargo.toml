@@ -1,9 +1,10 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+exclude = ["vendor"]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 license = "GPL-3.0-only"
 publish = false
@@ -42,3 +43,7 @@ strip = true
 # egui and wgpu are unusably slow unoptimized; our own crates stay fast to rebuild.
 [profile.dev.package."*"]
 opt-level = 2
+
+# egui-wgpu with HDR surface support; see vendor/README.md.
+[patch.crates-io]
+egui-wgpu = { path = "vendor/egui-wgpu" }

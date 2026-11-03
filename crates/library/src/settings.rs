@@ -11,11 +11,30 @@ pub struct Settings {
     pub volume: u8,
     pub muted: bool,
     pub hardware_decoding: bool,
+    /// Show hardware-decoded pictures straight from the GPU, without a copy through memory.
+    pub gpu_frames: bool,
+    /// Present HDR video above SDR white on HDR displays; takes effect at the next launch.
+    pub hdr_output: bool,
+    /// The accent color of the interface and the app icon.
+    pub theme: ColorTheme,
     pub resume_playback: bool,
     /// Seconds jumped by the arrow keys.
     pub seek_step_seconds: u32,
     pub updates: UpdatePreferences,
     pub editor: EditorPreferences,
+    /// Where the window was when the app last closed.
+    pub window: Option<WindowPlacement>,
+}
+
+/// The window's size and position when not maximized, and whether it was maximized. On
+/// Windows the outer rectangle in pixels; elsewhere egui's logical points.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowPlacement {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub maximized: bool,
 }
 
 impl Default for Settings {
@@ -25,12 +44,42 @@ impl Default for Settings {
             volume: 80,
             muted: false,
             hardware_decoding: true,
+            gpu_frames: true,
+            hdr_output: true,
+            theme: ColorTheme::default(),
             resume_playback: true,
             seek_step_seconds: 5,
             updates: UpdatePreferences::default(),
             editor: EditorPreferences::default(),
+            window: None,
         }
     }
+}
+
+/// The interface's accent color, which the app icon follows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ColorTheme {
+    #[default]
+    Teal,
+    Ocean,
+    Mint,
+    Amber,
+    Coral,
+    Purple,
+    Graphite,
+}
+
+impl ColorTheme {
+    pub const ALL: [ColorTheme; 7] = [
+        ColorTheme::Teal,
+        ColorTheme::Ocean,
+        ColorTheme::Mint,
+        ColorTheme::Amber,
+        ColorTheme::Coral,
+        ColorTheme::Purple,
+        ColorTheme::Graphite,
+    ];
 }
 
 /// Trim editor choices that carry over between files.

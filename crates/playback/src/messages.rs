@@ -5,7 +5,7 @@ use crossbeam::atomic::AtomicCell;
 use cut::{StreamIndex, Ticks};
 use media::{AudioEffects, MediaInfo, Packet, StreamParams, Subtitle, VideoFrame};
 
-use crate::{AudioAnchor, Generation, PlaybackError};
+use crate::{AnchorPair, Generation, PlaybackError};
 
 /// Sent from the reader to a decoder thread, in file order.
 pub(crate) enum PacketMessage {
@@ -13,6 +13,8 @@ pub(crate) enum PacketMessage {
     /// Drop buffered state; with `exact_target`, skip output before it.
     Flush {
         generation: Generation,
+        /// Where the seek went, in microseconds from the start of the file.
+        target: Ticks,
         exact_target: Option<Ticks>,
     },
     End(Generation),
@@ -34,9 +36,17 @@ pub(crate) enum Command {
 pub(crate) enum Event {
     Opened(Box<Opened>),
     Failed(PlaybackError),
-    VideoDecoder { hardware: bool },
+    VideoDecoder {
+        hardware: bool,
+    },
     AudioReady(AudioControl),
     AudioFailed(PlaybackError),
+    /// Whether the selected audio stream could be decoded.
+    AudioDecoder {
+        available: bool,
+    },
+    /// The video stream can't be decoded; play the rest without it.
+    VideoFailed(PlaybackError),
     Subtitle(Generation, Subtitle),
     VideoEnded(Generation),
     AudioEnded(Generation),
@@ -59,7 +69,7 @@ pub(crate) struct DecodedVideo {
 /// Lock-free state shared by the player and its threads.
 pub(crate) struct Shared {
     generation: AtomicU64,
-    pub audio_anchor: AtomicCell<Option<AudioAnchor>>,
+    pub audio_anchor: AtomicCell<Option<AnchorPair>>,
     pub audio_effects: AtomicCell<AudioEffects>,
     quit: AtomicBool,
 }

@@ -124,6 +124,13 @@ impl History {
         self.cut_sessions.insert(0, session);
         self.cut_sessions.truncate(MAX_CUT_SESSIONS);
     }
+
+    /// Returns whether there was a session to forget.
+    pub fn forget_cut_session(&mut self, path: &Path) -> bool {
+        let before = self.cut_sessions.len();
+        self.cut_sessions.retain(|session| session.path != path);
+        self.cut_sessions.len() != before
+    }
 }
 
 #[cfg(test)]

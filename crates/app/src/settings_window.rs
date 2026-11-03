@@ -1,5 +1,5 @@
 use eframe::egui::{self, RichText};
-use library::Settings;
+use library::{ColorTheme, Settings};
 
 use crate::theme;
 use crate::updates::Updates;
@@ -20,6 +20,10 @@ pub fn show(
         .default_width(380.0)
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing.y = 10.0;
+            section_title(ui, "Color");
+            changed |= theme_swatches(ui, &mut settings.theme);
+
+            ui.add_space(6.0);
             section_title(ui, "Playback");
             changed |= widgets::toggle(ui, &mut settings.hardware_decoding, "Hardware decoding")
                 .on_hover_text(
@@ -27,6 +31,29 @@ pub fn show(
                      Applies to the next file.",
                 )
                 .changed();
+            if cfg!(windows) {
+                ui.add_enabled_ui(settings.hardware_decoding, |ui| {
+                    changed |= widgets::toggle(
+                        ui,
+                        &mut settings.gpu_frames,
+                        "Keep decoded video on the GPU",
+                    )
+                    .on_hover_text(
+                        "Shows hardware-decoded frames without copying them through system \
+                         memory: less CPU and memory use, most of all at 4K. Applies to the \
+                         next file.",
+                    )
+                    .changed();
+                });
+            }
+            if cfg!(windows) {
+                changed |= widgets::toggle(ui, &mut settings.hdr_output, "HDR output")
+                    .on_hover_text(
+                        "Shows HDR video with its full brightness instead of toning it down, \
+                         when Windows HDR is on as VibePlayer starts. Applies at the next start.",
+                    )
+                    .changed();
+            }
             changed |= widgets::toggle(
                 ui,
                 &mut settings.resume_playback,
@@ -107,7 +134,45 @@ pub fn show(
                     "Releases",
                     format!("https://github.com/{}/releases", update::REPOSITORY),
                 );
+                if let Some(log) = library::log::path() {
+                    ui.label(RichText::new("·").color(theme::TEXT_DIM));
+                    if ui
+                        .link("Log file")
+                        .on_hover_text("Shows the diagnostic log, for reporting a problem")
+                        .clicked()
+                    {
+                        crate::os::show_in_folder(log);
+                    }
+                }
             });
         });
+    changed
+}
+
+/// A row of color dots, one per theme. Returns whether the choice changed.
+fn theme_swatches(ui: &mut egui::Ui, chosen: &mut ColorTheme) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        for candidate in ColorTheme::ALL {
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+            let painter = ui.painter();
+            let selected = *chosen == candidate;
+            if selected || response.hovered() {
+                let ring = if selected {
+                    theme::TEXT
+                } else {
+                    theme::TEXT_DIM
+                };
+                painter.circle_stroke(rect.center(), 12.0, egui::Stroke::new(2.0, ring));
+            }
+            painter.circle_filled(rect.center(), 9.0, theme::swatch(candidate));
+            if response.on_hover_text(theme::name(candidate)).clicked() && !selected {
+                *chosen = candidate;
+                changed = true;
+            }
+        }
+    });
     changed
 }

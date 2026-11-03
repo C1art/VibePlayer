@@ -4,7 +4,9 @@
 mod actions;
 mod app;
 mod app_actions;
+mod chapters;
 mod controls;
+mod diagnostics;
 mod editor;
 mod editor_actions;
 mod icons;
@@ -23,6 +25,7 @@ mod updates;
 mod video_view;
 mod welcome;
 mod widgets;
+mod window_state;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,25 +35,34 @@ use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetup, WgpuSetupCreateNew};
 use eframe::wgpu;
 
 fn main() -> eframe::Result {
-    let initial_file = std::env::args_os().nth(1).map(PathBuf::from);
+    // Absolute, so a running instance with another working directory can open it.
+    let initial_file = std::env::args_os()
+        .nth(1)
+        .map(PathBuf::from)
+        .map(|path| std::path::absolute(&path).unwrap_or(path));
     let listener = match os::single_instance::claim(initial_file.as_deref()) {
         os::single_instance::Claim::Forwarded => return Ok(()),
         os::single_instance::Claim::Primary(listener) => listener,
     };
     let store = library::Store::open_default().ok();
+    if let Some(store) = &store {
+        library::log::start(store.dir());
+    }
+    diagnostics::install_panic_hook();
+    let settings = store
+        .as_ref()
+        .map(library::Store::load_settings)
+        .unwrap_or_default();
+    let viewport = egui::ViewportBuilder::default()
+        .with_title("VibePlayer")
+        .with_app_id("VibePlayer")
+        .with_inner_size([1280.0, 760.0])
+        .with_min_inner_size([480.0, 300.0])
+        .with_drag_and_drop(true)
+        .with_icon(theme::icon(settings.theme));
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("VibePlayer")
-            .with_app_id("VibePlayer")
-            .with_inner_size([1280.0, 760.0])
-            .with_min_inner_size([480.0, 300.0])
-            .with_drag_and_drop(true)
-            .with_icon(Arc::new(egui::IconData {
-                rgba: include_bytes!("../resources/icon-64.rgba").to_vec(),
-                width: 64,
-                height: 64,
-            })),
-        wgpu_options: wgpu_configuration(),
+        viewport: window_state::restore(viewport, settings.window),
+        wgpu_options: wgpu_configuration(settings.hdr_output),
         ..Default::default()
     };
     eframe::run_native(
@@ -61,6 +73,7 @@ fn main() -> eframe::Result {
             Ok(Box::new(app::VibePlayerApp::new(
                 creation,
                 store,
+                settings,
                 initial_file,
                 requests,
             )))
@@ -69,7 +82,7 @@ fn main() -> eframe::Result {
 }
 
 /// Prefers DX12, asks for 16-bit textures when available, and allows 8K frames.
-fn wgpu_configuration() -> WgpuConfiguration {
+fn wgpu_configuration(high_dynamic_range: bool) -> WgpuConfiguration {
     let mut setup = WgpuSetupCreateNew::without_display_handle();
     setup.instance_descriptor.backends =
         wgpu::Backends::DX12 | wgpu::Backends::VULKAN | wgpu::Backends::METAL;
@@ -85,6 +98,7 @@ fn wgpu_configuration() -> WgpuConfiguration {
     });
     WgpuConfiguration {
         wgpu_setup: WgpuSetup::CreateNew(setup),
+        high_dynamic_range,
         ..Default::default()
     }
 }

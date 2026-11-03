@@ -1,8 +1,17 @@
 use media::{PlaneLayout, VideoFrame};
 
-use crate::color::ColorParams;
+use crate::color::{ColorParams, Output};
 
-const UNIFORM_SIZE: u64 = 9 * 16;
+/// An HDR display's brightness levels, for showing video on an scRGB surface.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DisplayLevels {
+    /// Where the system puts SDR white.
+    pub sdr_white_nits: f32,
+    /// The brightest the display can go.
+    pub peak_nits: f32,
+}
+
+const UNIFORM_SIZE: u64 = 10 * 16;
 
 struct PlaneTextures {
     key: (u32, u32, PlaneLayout),
@@ -19,7 +28,16 @@ pub struct VideoRenderer {
     sampler: wgpu::Sampler,
     uniforms: wgpu::Buffer,
     planes: Option<PlaneTextures>,
-    target_is_srgb: bool,
+    /// What `paint` draws: the uploaded planes, or a picture that stayed on the GPU.
+    showing: Option<wgpu::BindGroup>,
+    #[cfg(windows)]
+    shared: crate::shared::SharedFrames,
+    /// The window takes linear values: an sRGB or half-float (scRGB) surface.
+    linear_target: bool,
+    /// Set for an scRGB surface on an HDR display.
+    display: Option<DisplayLevels>,
+    /// The shown frame's color description, to redo the color setup when the display changes.
+    shown_color: Option<(media::ColorInfo, PlaneLayout, Option<f32>)>,
     high_bit_depth: bool,
 }
 
@@ -111,7 +129,13 @@ impl VideoRenderer {
             sampler,
             uniforms,
             planes: None,
-            target_is_srgb: target_format.is_srgb(),
+            showing: None,
+            #[cfg(windows)]
+            shared: crate::shared::SharedFrames::default(),
+            linear_target: target_format.is_srgb()
+                || target_format == wgpu::TextureFormat::Rgba16Float,
+            display: None,
+            shown_color: None,
             high_bit_depth: device
                 .features()
                 .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM),
@@ -124,13 +148,21 @@ impl VideoRenderer {
     }
 
     pub fn has_frame(&self) -> bool {
-        self.planes.is_some()
+        self.showing.is_some()
     }
 
     /// Copies a frame to the GPU. Frames this renderer can't take are ignored.
     pub fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &VideoFrame) {
         let layout = frame.layout;
         if layout.bits > 8 && !self.high_bit_depth {
+            return;
+        }
+        let limit = device.limits().max_texture_dimension_2d;
+        if frame.width() > limit || frame.height() > limit {
+            return;
+        }
+        if frame.gpu.is_some() {
+            self.show_shared(device, queue, frame);
             return;
         }
         let key = (frame.width(), frame.height(), layout);
@@ -171,12 +203,65 @@ impl VideoRenderer {
                 size,
             );
         }
+        // Only now that this frame is up does the shared picture stop being drawn.
+        #[cfg(windows)]
+        self.shared.release(queue);
+        self.showing = Some(planes.bind_group.clone());
+        self.write_color(queue, frame);
+    }
+
+    /// Shows a picture the decoder left on the GPU.
+    #[cfg(windows)]
+    fn show_shared(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &VideoFrame) {
+        let Some(picture) = &frame.gpu else {
+            return;
+        };
+        let bindings = crate::shared::Bindings {
+            layout: &self.layout,
+            uniforms: &self.uniforms,
+            sampler: &self.sampler,
+        };
+        if let Some(bind_group) = self.shared.show(device, queue, picture, &bindings) {
+            self.showing = Some(bind_group.clone());
+            self.write_color(queue, frame);
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn show_shared(&mut self, _device: &wgpu::Device, _queue: &wgpu::Queue, _frame: &VideoFrame) {}
+
+    fn write_color(&mut self, queue: &wgpu::Queue, frame: &VideoFrame) {
         let peak = frame
             .luminance
             .max_content
             .or(frame.luminance.max_mastering);
-        let params = ColorParams::new(frame.color, layout, peak, self.target_is_srgb);
+        self.shown_color = Some((frame.color, frame.layout, peak));
+        self.write_shown_color(queue);
+    }
+
+    fn write_shown_color(&self, queue: &wgpu::Queue) {
+        let Some((color, layout, peak)) = self.shown_color else {
+            return;
+        };
+        let output = match (self.linear_target, self.display) {
+            (true, Some(levels)) => Output::Scrgb {
+                sdr_white_nits: levels.sdr_white_nits,
+                peak_nits: levels.peak_nits,
+            },
+            (true, None) => Output::Linear,
+            (false, _) => Output::Gamma,
+        };
+        let params = ColorParams::new(color, layout, peak, output);
         queue.write_buffer(&self.uniforms, 0, &params.to_bytes());
+    }
+
+    /// Follows the display: `Some` for an HDR display behind a half-float surface, `None`
+    /// otherwise. A change redoes the shown frame's colors.
+    pub fn set_display(&mut self, queue: &wgpu::Queue, display: Option<DisplayLevels>) {
+        if display != self.display {
+            self.display = display;
+            self.write_shown_color(queue);
+        }
     }
 
     fn create_planes(&self, device: &wgpu::Device, key: (u32, u32, PlaneLayout)) -> PlaneTextures {
@@ -263,16 +348,22 @@ impl VideoRenderer {
 
     /// Draws the last uploaded frame over the render pass's current viewport.
     pub fn paint(&self, pass: &mut wgpu::RenderPass<'_>) {
-        let Some(planes) = &self.planes else {
+        let Some(bind_group) = &self.showing else {
             return;
         };
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &planes.bind_group, &[]);
+        pass.set_bind_group(0, bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
 
     /// Forgets the uploaded frame, e.g. when a file closes.
-    pub fn clear(&mut self) {
+    pub fn clear(&mut self, queue: &wgpu::Queue) {
+        #[cfg(windows)]
+        self.shared.release(queue);
+        #[cfg(not(windows))]
+        let _ = queue;
         self.planes = None;
+        self.showing = None;
+        self.shown_color = None;
     }
 }

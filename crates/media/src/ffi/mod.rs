@@ -2,6 +2,8 @@
 
 mod codec;
 mod color;
+#[cfg(windows)]
+mod d3d11;
 mod dict;
 mod filter;
 mod frame;
@@ -19,9 +21,11 @@ use ffmpeg_sys_next as sys;
 use crate::MediaError;
 
 pub use codec::{CodecContext, HwDevice, Received};
+#[cfg(windows)]
+pub use d3d11::{SurfacePool, adapter_index};
 pub use filter::{FilterGraph, FilterMedia};
 pub use frame::{Frame, MasteringLuminance};
-pub use input::{CodecParams, InputContext, StreamRef};
+pub use input::{CodecParams, Discard, InputContext, StreamRef};
 pub use output::{ChapterSpec, OutputContext};
 pub use packet::Packet;
 pub use params::StreamParams;
@@ -29,6 +33,12 @@ pub use subtitle::RawSubtitleRect;
 
 /// Lowers FFmpeg's own logging (errors only in debug builds, nothing in release); problems
 /// are reported through our own types.
+/// The FFmpeg build's version string, e.g. `n8.1`.
+pub fn version() -> String {
+    // SAFETY: av_version_info returns a static NUL-terminated string.
+    unsafe { string_from(sys::av_version_info()) }.unwrap_or_default()
+}
+
 pub fn quiet_logging() {
     let level = if cfg!(debug_assertions) {
         sys::AV_LOG_ERROR

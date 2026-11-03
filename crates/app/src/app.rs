@@ -1,11 +1,12 @@
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use crossbeam::channel::Receiver;
 use std::time::{Duration, Instant};
 
 use cut::{StreamIndex, Ticks};
 use eframe::egui::{self, Color32, CursorIcon, Rect, Sense};
-use library::{History, Saver, Settings, Store};
+use library::{History, Saver, Settings, Store, log};
 use media::{HardwareDecoding, Speed, VideoOptions};
 use playback::{LoadState, PlayerOptions};
 
@@ -13,11 +14,12 @@ use crate::actions::Action;
 use crate::controls::{self, ControlsState};
 use crate::editor::{self, Editor};
 use crate::info_panel::{self, PlaybackStats};
-use crate::os::{MediaControls, NowPlaying, PendingDialog};
+use crate::os::{MediaControls, NowPlaying, PendingDialog, Taskbar, TaskbarState};
 use crate::osd::Osd;
 use crate::session::Session;
 use crate::subtitles::SubtitleOverlay;
-use crate::{shortcuts, theme, video_view, welcome};
+use crate::window_state::WindowTracker;
+use crate::{chapters, diagnostics, shortcuts, theme, video_view, welcome};
 
 /// Controls hide after the pointer rests this long during playback.
 const CONTROLS_IDLE: Duration = Duration::from_millis(2200);
@@ -25,8 +27,9 @@ const CONTROLS_IDLE: Duration = Duration::from_millis(2200);
 const SCRUB_INTERVAL: Duration = Duration::from_millis(60);
 
 pub struct VibePlayerApp {
-    pub(crate) store: Option<Store>,
     pub(crate) saver: Option<Saver>,
+    window: WindowTracker,
+    native_window: Option<crate::os::NativeWindow>,
     pub(crate) settings: Settings,
     pub(crate) history: History,
     pub(crate) session: Option<Session>,
@@ -37,12 +40,17 @@ pub struct VibePlayerApp {
     pub(crate) settings_open: bool,
     pub(crate) updates: crate::updates::Updates,
     pub(crate) high_bit_depth: Option<bool>,
+    render_state: Option<eframe::egui_wgpu::RenderState>,
     pub(crate) last_activity: Instant,
     pub(crate) last_scrub: Option<Instant>,
+    pending_scrub: Option<Action>,
     pub(crate) scroll_accumulator: f32,
     pub(crate) subtitles: SubtitleOverlay,
     pub(crate) open_dialog: Option<PendingDialog>,
     pub(crate) media_controls: MediaControls,
+    taskbar: Taskbar,
+    /// How decoded pictures can stay on the renderer's GPU, where supported.
+    gpu_sharing: Option<media::GpuSharing>,
     pub(crate) fullscreen: bool,
     pub(crate) editor: Option<Editor>,
     /// Files sent by later launches of the app.
@@ -53,17 +61,26 @@ impl VibePlayerApp {
     pub fn new(
         creation: &eframe::CreationContext<'_>,
         store: Option<Store>,
+        settings: Settings,
         initial_file: Option<PathBuf>,
         instance_requests: Option<Receiver<PathBuf>>,
     ) -> VibePlayerApp {
-        theme::apply(&creation.egui_ctx);
-        let settings = store.as_ref().map(Store::load_settings).unwrap_or_default();
+        theme::apply(&creation.egui_ctx, settings.theme);
+        let native_window = crate::os::NativeWindow::of(creation);
+        crate::window_state::place(native_window, settings.window, &creation.egui_ctx);
+        let window = WindowTracker::new(native_window, settings.window);
+        if let Some(native_window) = native_window {
+            // The taskbar shows the window's large icon, which only the exe's resources give.
+            crate::os::show_app_icon(native_window, settings.theme);
+        }
         let history = store.as_ref().map(Store::load_history).unwrap_or_default();
         let high_bit_depth = creation.wgpu_render_state.as_ref().map(video_view::install);
+        diagnostics::log_startup(creation, high_bit_depth);
         let mut app = VibePlayerApp {
-            saver: store.clone().map(Saver::spawn),
-            store,
+            saver: store.map(Saver::spawn),
             settings,
+            window,
+            native_window,
             history,
             session: None,
             error: None,
@@ -73,12 +90,19 @@ impl VibePlayerApp {
             settings_open: false,
             updates: crate::updates::Updates::default(),
             high_bit_depth,
+            render_state: creation.wgpu_render_state.clone(),
             last_activity: Instant::now(),
             last_scrub: None,
+            pending_scrub: None,
             scroll_accumulator: 0.0,
             subtitles: SubtitleOverlay::default(),
             open_dialog: None,
             media_controls: MediaControls::new(creation),
+            taskbar: Taskbar::new(&creation.egui_ctx),
+            gpu_sharing: creation
+                .wgpu_render_state
+                .as_ref()
+                .and_then(|state| render::gpu_sharing(&state.device)),
             fullscreen: false,
             editor: None,
             instance_requests,
@@ -105,6 +129,8 @@ impl VibePlayerApp {
             video: VideoOptions {
                 hardware,
                 high_bit_depth: self.high_bit_depth.unwrap_or(false),
+                deinterlace: true,
+                gpu: self.gpu_sharing.filter(|_| self.settings.gpu_frames),
             },
             volume: audio::Volume::from_percent(i32::from(self.settings.volume)),
             muted: self.settings.muted,
@@ -129,6 +155,10 @@ impl VibePlayerApp {
     /// Closes the current file, remembering where it stopped.
     pub(crate) fn close_file(&mut self) {
         self.close_editor();
+        // The last picture may hold GPU textures shared with the decoder; let them go now.
+        if let Some(render_state) = &self.render_state {
+            video_view::clear(render_state);
+        }
         if let Some(session) = self.session.take() {
             let player = &session.player;
             if let LoadState::Ready(_) = player.state() {
@@ -156,6 +186,17 @@ impl VibePlayerApp {
         }
     }
 
+    /// Recolors the interface and the app icon: the window's, and on Windows the icon the
+    /// shell shows for shortcuts and VibePlayer's videos.
+    fn apply_theme(&self, ctx: &egui::Context) {
+        let theme = self.settings.theme;
+        theme::apply(ctx, theme);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(theme::icon(theme))));
+        if let Some(window) = self.native_window {
+            crate::os::show_app_icon(window, theme);
+        }
+    }
+
     pub(crate) fn save_settings(&self) {
         if let Some(saver) = &self.saver {
             saver.save_settings(&self.settings);
@@ -166,7 +207,11 @@ impl VibePlayerApp {
         let Some(session) = &mut self.session else {
             return;
         };
+        if let Some(render_state) = frame.wgpu_render_state() {
+            video_view::follow_display(render_state);
+        }
         let update = session.player.update(now);
+        session.log.observe(&session.player);
         if update.frame_changed
             && let (Some(render_state), Some(video)) =
                 (frame.wgpu_render_state(), session.player.current_frame())
@@ -178,6 +223,10 @@ impl VibePlayerApp {
         }
         match session.player.state() {
             LoadState::Failed(error) => {
+                log::error(format!(
+                    "couldn't open {}: {error}",
+                    session.player.path().display()
+                ));
                 self.error = Some(format!("Couldn't open {}: {error}", session.file_name()));
                 self.session = None;
                 if let Some(render_state) = frame.wgpu_render_state() {
@@ -186,8 +235,10 @@ impl VibePlayerApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title("VibePlayer".into()));
                 return;
             }
-            LoadState::Ready(_) if !session.title_shown => {
+            LoadState::Ready(opened) if !session.title_shown => {
                 session.title_shown = true;
+                log::info(format!("opened {}", diagnostics::describe(&opened.info)));
+                session.chapters = chapters::marks(&opened.info).into();
                 // Only files that actually opened belong in Recent.
                 self.history.add_recent(session.player.path(), unix_now());
                 if let Some(saver) = &self.saver {
@@ -214,22 +265,40 @@ impl VibePlayerApp {
         !session.player.is_playing() || !idle || over_controls || menus_open
     }
 
-    fn handle_scrub_throttle(&mut self, actions: &mut Vec<Action>, now: Instant) {
-        actions.retain(|action| match action {
-            Action::SeekTo {
-                mode: playback::SeekMode::Keyframe,
-                ..
-            } => {
-                let due = self
-                    .last_scrub
-                    .is_none_or(|last| now.duration_since(last) >= SCRUB_INTERVAL);
-                if due {
-                    self.last_scrub = Some(now);
-                }
-                due
+    /// Lets through at most one scrub (keyframe seek) per interval. The latest one held back
+    /// is sent once the interval is up, so the picture matches where the pointer stopped.
+    fn handle_scrub_throttle(
+        &mut self,
+        ctx: &egui::Context,
+        actions: &mut Vec<Action>,
+        now: Instant,
+    ) {
+        let mut latest = None;
+        actions.retain(|action| {
+            let scrub = is_scrub(action);
+            if scrub {
+                latest = Some(action.clone());
+            } else if moves_playhead(action) {
+                // A committed seek supersedes a held-back scrub.
+                self.pending_scrub = None;
             }
-            _ => true,
+            !scrub
         });
+        if latest.is_some() {
+            self.pending_scrub = latest;
+        }
+        if self.pending_scrub.is_none() {
+            return;
+        }
+        let wait = self.last_scrub.map_or(Duration::ZERO, |last| {
+            SCRUB_INTERVAL.saturating_sub(now - last)
+        });
+        if wait.is_zero() {
+            self.last_scrub = Some(now);
+            actions.extend(self.pending_scrub.take());
+        } else {
+            ctx.request_repaint_after(wait);
+        }
     }
 }
 
@@ -241,6 +310,7 @@ impl eframe::App for VibePlayerApp {
             self.high_bit_depth = frame.wgpu_render_state().map(video_view::install);
         }
         let mut actions = self.media_controls.poll();
+        actions.extend(self.taskbar.poll());
         let input_activity = ctx.input(|input| {
             input.pointer.delta() != egui::Vec2::ZERO
                 || input.pointer.any_down()
@@ -277,11 +347,13 @@ impl eframe::App for VibePlayerApp {
             }
         }
         self.fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+        self.window.observe(&ctx);
         actions.extend(shortcuts::read(
             &ctx,
             i64::from(self.settings.seek_step_seconds),
         ));
         self.poll_session(&ctx, frame, now);
+        self.end_preview();
         if let Some(editor) = &mut self.editor
             && editor.poll()
         {
@@ -307,15 +379,20 @@ impl eframe::App for VibePlayerApp {
         }
         let mut settings_changed = false;
         if self.settings_open {
+            let theme = self.settings.theme;
             settings_changed |= crate::settings_window::show(
                 &ctx,
                 &mut self.settings_open,
                 &mut self.settings,
                 &mut self.updates,
             );
+            if self.settings.theme != theme {
+                self.apply_theme(&ctx);
+            }
         }
         self.updates.tick(&self.settings);
-        match self.updates.poll(&mut self.settings) {
+        let exporting = self.editor.as_ref().is_some_and(Editor::is_exporting);
+        match self.updates.poll(&mut self.settings, exporting) {
             crate::updates::UpdateOutcome::SettingsChanged => settings_changed = true,
             crate::updates::UpdateOutcome::InstallerLaunched => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -341,8 +418,14 @@ impl eframe::App for VibePlayerApp {
         if hide_cursor {
             ctx.set_cursor_icon(CursorIcon::None);
         }
-        self.handle_scrub_throttle(&mut actions, now);
+        self.handle_scrub_throttle(&ctx, &mut actions, now);
         for action in actions {
+            // Any seek ends a selection preview (starting one sets it again).
+            if moves_playhead(&action)
+                && let Some(editor) = &mut self.editor
+            {
+                editor.previewing = false;
+            }
             self.apply(&ctx, action, now);
         }
         self.update_media_controls();
@@ -352,11 +435,16 @@ impl eframe::App for VibePlayerApp {
     }
 
     fn on_exit(&mut self) {
+        // Dropping the editor cancels a running export and removes its temp file.
         self.close_file();
-        if let Some(store) = &self.store {
-            let _ = store.save_settings(&self.settings);
-            let _ = store.save_history(&self.history);
+        self.settings.window = self.window.placement();
+        if let Some(saver) = &self.saver {
+            saver.save_settings(&self.settings);
+            saver.save_history(&self.history);
+            saver.flush();
         }
+        log::info("closed");
+        log::flush(Duration::from_secs(1));
     }
 }
 
@@ -371,7 +459,19 @@ impl VibePlayerApp {
         let Some(session) = &mut self.session else {
             return false;
         };
-        let response = ui.interact(area, egui::Id::unique("video area"), Sense::click());
+        // Only the picture takes clicks: blank parts of the panels below must not toggle play.
+        let panel_height = if self.editor.is_some() {
+            editor::HEIGHT
+        } else if visible {
+            controls::HEIGHT
+        } else {
+            0.0
+        };
+        let clickable = Rect::from_min_max(
+            area.min,
+            egui::pos2(area.right(), (area.bottom() - panel_height).max(area.top())),
+        );
+        let response = ui.interact(clickable, egui::Id::unique("video area"), Sense::click());
         if response.double_clicked() {
             actions.push(Action::ToggleFullscreen);
         } else if response.clicked() {
@@ -441,6 +541,7 @@ impl VibePlayerApp {
                 audio_stream: opened.audio,
                 subtitle_stream: opened.subtitle,
                 highlight: None,
+                chapters: Rc::clone(&session.chapters),
             };
             let mut preview = |at: Ticks| session.thumbnail(&ctx, at);
             over = controls::show(ui, area, &state, &mut preview, actions);
@@ -489,6 +590,15 @@ impl VibePlayerApp {
                 title,
                 playing: *playing,
             }));
+        let export = self
+            .editor
+            .as_ref()
+            .filter(|editor| editor.is_exporting())
+            .map(Editor::export_fraction);
+        self.taskbar.update(TaskbarState {
+            playing: now_playing.map(|(_, playing)| playing),
+            progress: export.or(self.updates.download_progress()),
+        });
     }
 }
 
@@ -516,7 +626,7 @@ fn paint_audio_only(ui: &egui::Ui, area: Rect, name: &str) {
             egui::vec2(52.0, 52.0),
         ),
         crate::icons::Icon::Volume,
-        theme::ACCENT_SOFT,
+        theme::accent_soft(),
     );
     painter.text(
         area.center() + egui::vec2(0.0, 52.0),
@@ -545,6 +655,36 @@ fn paint_title(ui: &egui::Ui, area: Rect, name: &str) {
 }
 
 /// Mouse wheel movement this frame in notches; trackpads count every 40 points as one.
+fn is_scrub(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::SeekTo {
+            mode: playback::SeekMode::Keyframe,
+            ..
+        } | Action::Editor(editor::EditorAction::Seek(_, playback::SeekMode::Keyframe))
+    )
+}
+
+fn moves_playhead(action: &Action) -> bool {
+    use editor::EditorAction;
+    matches!(
+        action,
+        Action::SeekTo { .. }
+            | Action::SeekBy { .. }
+            | Action::SeekToTenth(_)
+            | Action::NextChapter
+            | Action::PreviousChapter
+            | Action::StepBack
+            | Action::StepForward
+            | Action::Editor(
+                EditorAction::Seek(..)
+                    | EditorAction::PreviewSelection
+                    | EditorAction::StepBack
+                    | EditorAction::StepForward
+            )
+    )
+}
+
 fn wheel_notches(ctx: &egui::Context) -> f32 {
     ctx.input(|input| {
         input

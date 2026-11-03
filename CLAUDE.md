@@ -42,6 +42,7 @@ Cargo workspace. Dependencies flow downward only; `cut` and `library` never depe
 - `crates/export/` — runs a cut plan through `media`: stream copy, smart-cut head re-encode, audio-only re-encode for volume/EQ, verification
 - `crates/update/` — release check, version comparison, ask-later and skipped-version rules, installer download
 - `crates/library/` — settings, recents, resume positions, cut sessions, update preferences in `%APPDATA%\VibePlayer`
+- `vendor/egui-wgpu/` — egui-wgpu patched for HDR (scRGB) output; see `vendor/README.md` before upgrading egui
 - `installer/` — Inno Setup script (`vibeplayer.iss`)
 - `.github/workflows/windows-ci.yml` — Windows CI and releases (this agent can't push workflow files; propose changes for the user to commit)
 - `tests/fixtures/` — small media files for integration tests; regenerate with `generate.sh`

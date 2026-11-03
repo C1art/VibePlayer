@@ -3,6 +3,7 @@ use std::thread;
 
 use crossbeam::channel::{self, Receiver, Sender, TryRecvError};
 use cut::{StreamIndex, Ticks};
+use eframe::egui;
 use media::{Demuxer, KeyframeSpan};
 
 /// Looks up the keyframes around the trim start on a worker, so dragging never blocks the UI.
@@ -14,7 +15,7 @@ pub struct KeyframeFinder {
 }
 
 impl KeyframeFinder {
-    pub fn new(path: PathBuf, stream: StreamIndex) -> KeyframeFinder {
+    pub fn new(path: PathBuf, stream: StreamIndex, repaint: egui::Context) -> KeyframeFinder {
         let (requests, request_receiver) = channel::unbounded::<Ticks>();
         let (result_sender, results) = channel::unbounded();
         let _ = thread::Builder::new()
@@ -26,14 +27,11 @@ impl KeyframeFinder {
                     let span = demuxer
                         .as_mut()
                         .and_then(|d| d.keyframes_around(stream, target).ok())
-                        .unwrap_or(KeyframeSpan {
-                            before: None,
-                            after: None,
-                            frames_until_after: 0,
-                        });
+                        .unwrap_or_default();
                     if result_sender.send((target, span)).is_err() {
                         return;
                     }
+                    repaint.request_repaint();
                 }
             });
         KeyframeFinder {
@@ -49,8 +47,8 @@ impl KeyframeFinder {
         while let Ok(result) = self.results.try_recv() {
             self.latest = Some(result);
         }
-        match self.latest {
-            Some((asked, span)) if asked == target => Some(span),
+        match &self.latest {
+            Some((asked, span)) if *asked == target => Some(span.clone()),
             _ => {
                 if self.asked != Some(target) {
                     self.asked = Some(target);
@@ -70,14 +68,19 @@ pub struct KeyframeIndex {
 }
 
 impl KeyframeIndex {
-    pub fn new(path: PathBuf, stream: StreamIndex) -> KeyframeIndex {
+    pub fn new(path: PathBuf, stream: StreamIndex, repaint: egui::Context) -> KeyframeIndex {
         let (sender, batches) = channel::unbounded();
         let _ = thread::Builder::new()
             .name("keyframe index".into())
             .spawn(move || {
                 if let Ok(mut demuxer) = Demuxer::open(&path) {
-                    let _ = demuxer.scan_all_keyframes(stream, |batch| sender.send(batch).is_ok());
+                    let _ = demuxer.scan_all_keyframes(stream, |batch| {
+                        repaint.request_repaint();
+                        sender.send(batch).is_ok()
+                    });
                 }
+                drop(sender);
+                repaint.request_repaint();
             });
         KeyframeIndex {
             batches,
@@ -134,6 +137,17 @@ pub fn nearest(keyframes: &[Ticks], target: Ticks) -> Option<Ticks> {
         .min_by_key(|k| (k.0 - target.0).unsigned_abs())
 }
 
+/// Where a start dragged to `target` snaps: the nearest keyframe, unless that would land at or
+/// past `end` while `target` doesn't, which would move the end too; then the one before.
+pub fn snap_start(keyframes: &[Ticks], target: Ticks, end: Ticks) -> Option<Ticks> {
+    let snapped = nearest(keyframes, target)?;
+    if snapped >= end && target < end {
+        previous(keyframes, target + Ticks(1))
+    } else {
+        Some(snapped)
+    }
+}
+
 /// The last keyframe strictly before `target`.
 pub fn previous(keyframes: &[Ticks], target: Ticks) -> Option<Ticks> {
     let at = keyframes.partition_point(|&k| k < target);
@@ -158,6 +172,18 @@ mod tests {
         assert_eq!(nearest(&KEYS, Ticks(1_600)), Some(Ticks(2_000)));
         assert_eq!(nearest(&KEYS, Ticks(9_000)), Some(Ticks(2_000)));
         assert_eq!(nearest(&[], Ticks(5)), None);
+    }
+
+    #[test]
+    fn a_snapped_start_stays_before_the_end() {
+        assert_eq!(
+            snap_start(&KEYS, Ticks(1_800), Ticks(1_900)),
+            Some(Ticks(1_000))
+        );
+        assert_eq!(
+            snap_start(&KEYS, Ticks(1_800), Ticks(5_000)),
+            Some(Ticks(2_000))
+        );
     }
 
     #[test]

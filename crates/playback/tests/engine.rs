@@ -19,6 +19,8 @@ fn options(autoplay: bool) -> PlayerOptions {
         video: VideoOptions {
             hardware: HardwareDecoding::Off,
             high_bit_depth: true,
+            deinterlace: true,
+            gpu: None,
         },
         volume: audio::Volume::default(),
         muted: true,
@@ -159,5 +161,70 @@ fn stepping_back_from_a_keyframe_reaches_the_previous_gop() {
     player.step_backward(Instant::now());
     run_until(&mut player, Duration::from_secs(5), |p| {
         p.current_frame().is_some_and(|f| f.pts == Ticks(1_960_000))
+    });
+}
+
+#[test]
+#[ignore]
+fn a_keyframe_seek_puts_the_clock_on_the_keyframe_it_shows() {
+    let mut player = Player::open(fixture("h264_bframes.mp4"), options(false), Instant::now());
+    run_until(&mut player, Duration::from_secs(5), |p| {
+        p.current_frame().is_some()
+    });
+    player.seek(Ticks(2_600_000), SeekMode::Keyframe);
+    run_until(&mut player, Duration::from_secs(5), |p| !p.is_seeking());
+    assert_eq!(player.position(), Ticks(2_000_000));
+    assert_eq!(
+        player.current_frame().map(|f| f.pts),
+        Some(Ticks(2_000_000))
+    );
+}
+
+#[test]
+#[ignore]
+fn quick_step_backs_each_move_one_frame() {
+    let mut player = Player::open(fixture("h264_bframes.mp4"), options(false), Instant::now());
+    run_until(&mut player, Duration::from_secs(5), |p| {
+        p.current_frame().is_some()
+    });
+    player.seek(Ticks(2_480_000), SeekMode::Exact);
+    run_until(&mut player, Duration::from_secs(5), |p| !p.is_seeking());
+    // Three presses before the first has finished decoding.
+    for _ in 0..3 {
+        player.step_backward(Instant::now());
+    }
+    run_until(&mut player, Duration::from_secs(5), |p| {
+        !p.is_seeking() && p.current_frame().map(|f| f.pts) == Some(Ticks(2_360_000))
+    });
+}
+
+#[test]
+#[ignore]
+fn a_seek_past_the_end_of_the_audio_finishes() {
+    let mut player = Player::open(fixture("short_audio.mp4"), options(true), Instant::now());
+    started_moving(&mut player);
+    player.seek(Ticks(12_000_000), SeekMode::Exact);
+    run_until(&mut player, Duration::from_secs(8), |p| !p.is_seeking());
+}
+
+#[test]
+#[ignore]
+fn audio_that_starts_late_does_not_hold_up_the_picture() {
+    let mut player = Player::open(fixture("late_audio.mp4"), options(true), Instant::now());
+    let started = started_moving(&mut player);
+    run_until(&mut player, Duration::from_secs(12), |p| {
+        p.position() > Ticks(6_000_000)
+    });
+    // Real time from the start, give or take output latency: no long wait, no jump ahead.
+    let elapsed = started.elapsed().as_secs_f64();
+    assert!((5.0..8.5).contains(&elapsed), "took {elapsed}s");
+}
+
+#[test]
+#[ignore]
+fn playback_goes_on_after_the_audio_ends() {
+    let mut player = Player::open(fixture("short_audio.mp4"), options(true), Instant::now());
+    run_until(&mut player, Duration::from_secs(15), |p| {
+        p.position() > Ticks(8_000_000)
     });
 }

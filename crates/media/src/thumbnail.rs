@@ -15,14 +15,19 @@ pub struct RgbaImage {
     pub pixels: Vec<u8>,
 }
 
+/// Width, height, pixel format and sample aspect: a change needs a new filter.
+type FilterKey = (u32, u32, i32, (i32, i32));
+
 /// Grabs keyframe previews from a file, independently of playback.
 pub struct ThumbnailExtractor {
     demuxer: Demuxer,
     stream: StreamIndex,
     timebase: Timebase,
     codec: CodecContext,
+    /// The file's start time in microseconds; positions asked for are relative to it.
+    origin: Ticks,
     max_width: u32,
-    filter: Option<((u32, u32, i32), FilterGraph)>,
+    filter: Option<(FilterKey, FilterGraph)>,
     packet: Packet,
     decoded: Frame,
     scaled: Frame,
@@ -36,7 +41,9 @@ impl ThumbnailExtractor {
             .ok_or_else(|| MediaError::Unsupported("no video stream".into()))?;
         demuxer.select_streams(&[stream]);
         let params = demuxer.stream_params(stream)?;
+        let origin = demuxer.input().start_time().unwrap_or(Ticks::ZERO);
         Ok(ThumbnailExtractor {
+            origin,
             timebase: params.timebase(),
             codec: CodecContext::decoder(&params, None)?,
             demuxer,
@@ -49,9 +56,10 @@ impl ThumbnailExtractor {
         })
     }
 
-    /// The keyframe at or before `at` (microseconds), scaled to fit the maximum width.
+    /// The keyframe at or before `at` (microseconds from the start of the file), scaled to fit
+    /// the maximum width at the picture's display aspect.
     pub fn extract(&mut self, at: Ticks) -> Result<Option<RgbaImage>, MediaError> {
-        let target = at.rescale(Timebase::MICROS, self.timebase);
+        let target = (at + self.origin).rescale(Timebase::MICROS, self.timebase);
         self.demuxer.seek_stream(self.stream, target)?;
         self.codec.flush();
         let mut packets_read = 0;
@@ -81,6 +89,7 @@ impl ThumbnailExtractor {
             self.decoded.width(),
             self.decoded.height(),
             self.decoded.format(),
+            self.decoded.sample_aspect_ratio(),
         );
         if self.filter.as_ref().is_none_or(|(k, _)| *k != key) {
             let format = pixel_format_name(key.2)
@@ -92,8 +101,8 @@ impl ThumbnailExtractor {
                 self.timebase.num(),
                 self.timebase.den()
             );
-            let width = self.max_width.min(key.0.max(2));
-            let description = format!("scale={width}:-2:flags=bilinear,format=rgba");
+            let (width, height) = thumbnail_size(key.0, key.1, key.3, self.max_width);
+            let description = format!("scale={width}:{height}:flags=bilinear,format=rgba");
             self.filter = Some((
                 key,
                 FilterGraph::new(FilterMedia::Video, &args, &description)?,
@@ -125,5 +134,39 @@ impl ThumbnailExtractor {
             height,
             pixels,
         })
+    }
+}
+
+/// The size to scale a `width` × `height` picture with `sample_aspect` pixels to so it shows at
+/// its display aspect, no wider than `max_width`. Even, for chroma-subsampled formats.
+fn thumbnail_size(
+    width: u32,
+    height: u32,
+    sample_aspect: (i32, i32),
+    max_width: u32,
+) -> (u32, u32) {
+    let (num, den) = sample_aspect;
+    let aspect = if num > 0 && den > 0 {
+        f64::from(num) / f64::from(den)
+    } else {
+        1.0
+    };
+    let display_width = (f64::from(width.max(1)) * aspect).max(1.0);
+    let even = |value: f64| ((value / 2.0).round() as u32 * 2).max(2);
+    let out_width = even(display_width.min(f64::from(max_width)));
+    let out_height = even(f64::from(out_width) * f64::from(height.max(1)) / display_width);
+    (out_width, out_height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::thumbnail_size;
+
+    #[test]
+    fn anamorphic_pictures_are_scaled_to_their_display_aspect() {
+        // DVD: 720×480 with 32:27 pixels shows at 16:9.
+        assert_eq!(thumbnail_size(720, 480, (32, 27), 160), (160, 90));
+        assert_eq!(thumbnail_size(320, 180, (0, 1), 160), (160, 90));
+        assert_eq!(thumbnail_size(100, 50, (1, 1), 160), (100, 50));
     }
 }

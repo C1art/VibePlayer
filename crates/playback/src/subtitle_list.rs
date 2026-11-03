@@ -24,16 +24,21 @@ impl SubtitleList {
         self.events.clear();
     }
 
-    /// The event showing at `position`. Events without an end last until the next one.
+    /// The latest-starting event showing at `position`; an earlier one still on screen shows
+    /// once a shorter one over it ends. Events without an end last until the next one.
     pub fn active(&self, position: Ticks) -> Option<&Subtitle> {
-        let index = self
+        let started = self
             .events
             .partition_point(|subtitle| subtitle.start <= position);
-        let subtitle = self.events[..index].last()?;
-        let next_start = self.events.get(index).map(|next| next.start);
-        let end = subtitle.end.or(next_start);
-        let visible = end.is_none_or(|end| position < end);
-        (visible && subtitle.content != SubtitleContent::Clear).then_some(subtitle)
+        // A clear event wipes the screen: nothing from before it shows again.
+        let visible = (0..started).rev().find(|&index| {
+            let subtitle = &self.events[index];
+            let next_start = self.events.get(index + 1).map(|next| next.start);
+            subtitle.content == SubtitleContent::Clear
+                || subtitle.end.or(next_start).is_none_or(|end| position < end)
+        })?;
+        let subtitle = &self.events[visible];
+        (subtitle.content != SubtitleContent::Clear).then_some(subtitle)
     }
 }
 
@@ -47,6 +52,32 @@ mod tests {
             end: end.map(Ticks),
             content: SubtitleContent::Text(text.into()),
         }
+    }
+
+    #[test]
+    fn a_longer_event_shows_again_after_a_shorter_one_inside_it() {
+        let mut list = SubtitleList::default();
+        list.add(text(10, Some(20), "long"));
+        list.add(text(12, Some(14), "short"));
+        let shown = |at| match &list.active(Ticks(at))?.content {
+            SubtitleContent::Text(text) => Some(text.clone()),
+            _ => None,
+        };
+        assert_eq!(shown(13).as_deref(), Some("short"));
+        assert_eq!(shown(15).as_deref(), Some("long"));
+        assert_eq!(shown(20), None);
+    }
+
+    #[test]
+    fn a_clear_event_hides_earlier_ones_for_good() {
+        let mut list = SubtitleList::default();
+        list.add(text(10, Some(20), "long"));
+        list.add(Subtitle {
+            start: Ticks(12),
+            end: Some(Ticks(13)),
+            content: SubtitleContent::Clear,
+        });
+        assert!(list.active(Ticks(15)).is_none());
     }
 
     #[test]

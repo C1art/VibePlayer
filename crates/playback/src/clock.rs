@@ -17,10 +17,18 @@ pub struct AudioAnchor {
     pub speed: Speed,
 }
 
+/// The latest anchor and the one before it. A new anchor is published as soon as its samples
+/// are queued, but the samples queued ahead of them still belong to the previous one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnchorPair {
+    pub current: AudioAnchor,
+    pub previous: Option<AudioAnchor>,
+}
+
 /// A snapshot of the audio device, taken when reading the clock.
 #[derive(Clone, Copy, Debug)]
 pub struct AudioReading {
-    pub anchor: AudioAnchor,
+    pub anchors: AnchorPair,
     pub played_frames: u64,
     pub latency: Ticks,
     pub sample_rate: SampleRate,
@@ -30,9 +38,16 @@ impl AudioReading {
     /// The media time currently audible.
     pub fn position(&self) -> Ticks {
         let timebase = self.sample_rate.timebase().unwrap_or(Timebase::MICROS);
-        let frames = self.played_frames as i64 - self.anchor.played_frames as i64;
-        let wall = Ticks(frames).rescale(timebase, Timebase::MICROS) - self.latency;
-        self.anchor.pts + self.anchor.speed.wall_to_media(wall)
+        let latency_frames = self.latency.rescale(Timebase::MICROS, timebase).0;
+        let audible = self.played_frames as i64 - latency_frames;
+        let current = self.anchors.current;
+        let anchor = match self.anchors.previous {
+            Some(previous) if audible < current.played_frames as i64 => previous,
+            _ => current,
+        };
+        let frames = audible - anchor.played_frames as i64;
+        let wall = Ticks(frames).rescale(timebase, Timebase::MICROS);
+        anchor.pts + anchor.speed.wall_to_media(wall)
     }
 }
 
@@ -119,11 +134,14 @@ mod tests {
 
     fn reading(played: u64, latency: i64) -> AudioReading {
         AudioReading {
-            anchor: AudioAnchor {
-                generation: Generation(1),
-                played_frames: 48_000,
-                pts: Ticks(10_000_000),
-                speed: Speed::NORMAL,
+            anchors: AnchorPair {
+                current: AudioAnchor {
+                    generation: Generation(1),
+                    played_frames: 48_000,
+                    pts: Ticks(10_000_000),
+                    speed: Speed::NORMAL,
+                },
+                previous: None,
             },
             played_frames: played,
             latency: Ticks(latency),
@@ -147,8 +165,24 @@ mod tests {
     #[test]
     fn audio_position_scales_with_the_anchor_speed() {
         let mut fast = reading(48_000 + 24_000, 0);
-        fast.anchor.speed = Speed::from_percent(200);
+        fast.anchors.current.speed = Speed::from_percent(200);
         assert_eq!(fast.position(), Ticks(11_000_000));
+    }
+
+    #[test]
+    fn samples_queued_before_a_new_anchor_keep_the_old_one() {
+        // At 1x from 0 s; the new 2x anchor starts at device frame 48 000 (1 s in).
+        let mut changed = reading(24_000, 0);
+        changed.anchors.previous = Some(AudioAnchor {
+            played_frames: 0,
+            pts: Ticks::ZERO,
+            ..changed.anchors.current
+        });
+        changed.anchors.current.pts = Ticks(1_000_000);
+        changed.anchors.current.speed = Speed::from_percent(200);
+        assert_eq!(changed.position(), Ticks(500_000));
+        changed.played_frames = 72_000;
+        assert_eq!(changed.position(), Ticks(2_000_000));
     }
 
     #[test]

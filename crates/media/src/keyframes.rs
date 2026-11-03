@@ -8,14 +8,22 @@ const SCAN_LIMIT: usize = 10_000;
 const RETRY_BACK: Ticks = Ticks(10_000_000);
 
 /// The keyframes on either side of a position, in the stream's timebase.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KeyframeSpan {
     /// The last keyframe at or before the position.
     pub before: Option<Ticks>,
     /// The first keyframe after the position, if one was found.
     pub after: Option<Ticks>,
-    /// Frames shown from the position up to `after` (or as far as the scan went).
-    pub frames_until_after: u32,
+    /// When each frame from the position up to `after` (or as far as the scan went) is shown,
+    /// in order.
+    pub frame_times: Vec<Ticks>,
+}
+
+impl KeyframeSpan {
+    /// Frames shown from the position up to the next keyframe.
+    pub fn frames_until_after(&self) -> usize {
+        self.frame_times.len()
+    }
 }
 
 impl Demuxer {
@@ -87,40 +95,12 @@ impl Demuxer {
             }
         }
         let limit = after.unwrap_or(Ticks(i64::MAX));
-        let frames = shown.iter().filter(|&&pts| pts < limit).count();
+        shown.retain(|&pts| pts < limit);
+        shown.sort_unstable();
         Ok(KeyframeSpan {
             before,
             after,
-            frames_until_after: u32::try_from(frames).unwrap_or(u32::MAX),
+            frame_times: shown,
         })
-    }
-
-    /// Reads `stream` from the start and reports keyframe timestamps in batches, so a long
-    /// file shows progress. Stops early when `report` returns `false`.
-    pub fn scan_all_keyframes(
-        &mut self,
-        stream: StreamIndex,
-        mut report: impl FnMut(Vec<Ticks>) -> bool,
-    ) -> Result<(), MediaError> {
-        self.select_streams(&[stream]);
-        let mut packet = Packet::new()?;
-        let mut batch = Vec::new();
-        let mut since_report = 0usize;
-        while self.read(&mut packet)? {
-            since_report += 1;
-            if packet.is_keyframe()
-                && let Some(pts) = packet.pts()
-            {
-                batch.push(pts);
-            }
-            if since_report >= 2_000 {
-                since_report = 0;
-                if !report(std::mem::take(&mut batch)) {
-                    return Ok(());
-                }
-            }
-        }
-        report(batch);
-        Ok(())
     }
 }

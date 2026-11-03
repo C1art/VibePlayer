@@ -32,7 +32,7 @@ ChangesAssociations=yes
 CloseApplications=yes
 RestartApplications=yes
 UninstallDisplayIcon={app}\{#AppExeName}
-SetupIconFile=..\crates\app\resources\icon.ico
+SetupIconFile=..\crates\app\resources\icons\teal.ico
 LicenseFile=..\LICENSE
 OutputDir=..\target\installer
 OutputBaseFilename=VibePlayer-{#AppVersion}-setup
@@ -59,6 +59,8 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 Root: HKA; Subkey: "Software\Classes\{#ProgId}"; ValueType: string; ValueName: ""; ValueData: "Video file"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\{#ProgId}\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExeName},0"
 Root: HKA; Subkey: "Software\Classes\{#ProgId}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}"" ""%1"""
+; VibePlayer points its videos' icon at the chosen color theme with a per-user override.
+Root: HKCU; Subkey: "Software\Classes\{#ProgId}\DefaultIcon"; Flags: uninsdeletekey dontcreatekey
 
 ; Lists VibePlayer in Settings > Default apps so the user can make it the default.
 Root: HKA; Subkey: "Software\{#AppName}"; Flags: uninsdeletekey

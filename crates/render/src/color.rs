@@ -4,6 +4,20 @@ use media::{ColorInfo, ColorRange, Matrix, PlaneLayout, Primaries, Transfer};
 const SDR_WHITE_NITS: f32 = 203.0;
 const DEFAULT_HDR_PEAK_NITS: f32 = 1000.0;
 
+/// scRGB's 1.0, in nits.
+const SCRGB_UNIT_NITS: f32 = 80.0;
+
+/// What the values written to the window mean.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Output {
+    /// sRGB-encoded, on an 8-bit surface.
+    Gamma,
+    /// Linear with 1.0 as white: an sRGB surface, or scRGB on an SDR display.
+    Linear,
+    /// scRGB on an HDR display: linear, 1.0 = 80 nits, brighter than white allowed.
+    Scrgb { sdr_white_nits: f32, peak_nits: f32 },
+}
+
 /// The shader's uniform block, laid out as 4-float rows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ColorParams {
@@ -12,6 +26,7 @@ pub(crate) struct ColorParams {
     pub gamut: [[f32; 4]; 3],
     pub misc: [f32; 4],
     pub flags: [f32; 4],
+    pub output: [f32; 4],
 }
 
 impl ColorParams {
@@ -19,7 +34,7 @@ impl ColorParams {
         color: ColorInfo,
         layout: PlaneLayout,
         peak_nits: Option<f32>,
-        target_is_srgb: bool,
+        output: Output,
     ) -> ColorParams {
         let (kr, kb) = match color.matrix {
             Matrix::Bt601 => (0.299, 0.114),
@@ -69,7 +84,7 @@ impl ColorParams {
                 sample_scale,
                 transfer,
                 peak.max(1.0),
-                if target_is_srgb { 1.0 } else { 0.0 },
+                if output == Output::Gamma { 0.0 } else { 1.0 },
             ],
             flags: [
                 if color.is_hdr() || wide_gamut {
@@ -81,6 +96,18 @@ impl ColorParams {
                 0.0,
                 0.0,
             ],
+            output: match output {
+                Output::Scrgb {
+                    sdr_white_nits,
+                    peak_nits,
+                } => [
+                    1.0,
+                    sdr_white_nits / SCRGB_UNIT_NITS,
+                    peak_nits.max(sdr_white_nits) / SCRGB_UNIT_NITS,
+                    0.0,
+                ],
+                Output::Gamma | Output::Linear => [0.0, 1.0, 1.0, 0.0],
+            },
         }
     }
 
@@ -89,7 +116,7 @@ impl ColorParams {
             .iter()
             .chain([&self.range])
             .chain(self.gamut.iter())
-            .chain([&self.misc, &self.flags])
+            .chain([&self.misc, &self.flags, &self.output])
             .flatten()
             .flat_map(|value| value.to_ne_bytes())
             .collect()
@@ -158,14 +185,14 @@ mod tests {
 
     #[test]
     fn limited_range_black_and_white_map_to_the_ends() {
-        let params = ColorParams::new(bt709_limited(), EIGHT_BIT, None, false);
+        let params = ColorParams::new(bt709_limited(), EIGHT_BIT, None, Output::Gamma);
         assert_close(convert(&params, 16.0, 128.0, 128.0), [0.0, 0.0, 0.0]);
         assert_close(convert(&params, 235.0, 128.0, 128.0), [1.0, 1.0, 1.0]);
     }
 
     #[test]
     fn bt709_red_converts_to_red() {
-        let params = ColorParams::new(bt709_limited(), EIGHT_BIT, None, false);
+        let params = ColorParams::new(bt709_limited(), EIGHT_BIT, None, Output::Gamma);
         // BT.709 limited-range codes for pure red.
         assert_close(convert(&params, 63.0, 102.0, 240.0), [1.0, 0.0, 0.0]);
     }
@@ -176,7 +203,7 @@ mod tests {
             range: ColorRange::Full,
             ..bt709_limited()
         };
-        let params = ColorParams::new(full, EIGHT_BIT, None, false);
+        let params = ColorParams::new(full, EIGHT_BIT, None, Output::Gamma);
         assert_close(convert(&params, 255.0, 128.0, 128.0), [1.0, 1.0, 1.0]);
     }
 
@@ -186,7 +213,7 @@ mod tests {
             bits: 10,
             ..EIGHT_BIT
         };
-        let params = ColorParams::new(bt709_limited(), ten_bit, None, false);
+        let params = ColorParams::new(bt709_limited(), ten_bit, None, Output::Gamma);
         // A 10-bit code of 940 (limited white) read from an R16Unorm texture.
         let sampled = 940.0 / 65535.0 * params.misc[0];
         let luma = (sampled - params.range[0]) * params.range[1];
@@ -195,14 +222,14 @@ mod tests {
 
     #[test]
     fn only_hdr_or_wide_gamut_takes_the_linear_path() {
-        let sdr = ColorParams::new(bt709_limited(), EIGHT_BIT, None, false);
+        let sdr = ColorParams::new(bt709_limited(), EIGHT_BIT, None, Output::Gamma);
         assert_eq!(sdr.flags[0], 0.0);
         let hdr = ColorInfo {
             transfer: Transfer::Pq,
             primaries: Primaries::Bt2020,
             ..bt709_limited()
         };
-        let hdr = ColorParams::new(hdr, EIGHT_BIT, Some(4000.0), false);
+        let hdr = ColorParams::new(hdr, EIGHT_BIT, Some(4000.0), Output::Gamma);
         assert_eq!(hdr.flags[0], 1.0);
         assert!((hdr.misc[2] - 4000.0 / 203.0).abs() < 0.01);
     }
@@ -214,18 +241,29 @@ mod tests {
             ..EIGHT_BIT
         };
         assert_eq!(
-            ColorParams::new(bt709_limited(), nv12, None, false).flags[1],
+            ColorParams::new(bt709_limited(), nv12, None, Output::Gamma).flags[1],
             1.0
         );
         assert_eq!(
-            ColorParams::new(bt709_limited(), EIGHT_BIT, None, false).flags[1],
+            ColorParams::new(bt709_limited(), EIGHT_BIT, None, Output::Gamma).flags[1],
             0.0
         );
     }
 
     #[test]
-    fn uniform_block_is_nine_rows_of_four_floats() {
-        let params = ColorParams::new(bt709_limited(), EIGHT_BIT, None, false);
-        assert_eq!(params.to_bytes().len(), 9 * 16);
+    fn uniform_block_is_ten_rows_of_four_floats() {
+        let params = ColorParams::new(bt709_limited(), EIGHT_BIT, None, Output::Gamma);
+        assert_eq!(params.to_bytes().len(), 10 * 16);
+    }
+
+    #[test]
+    fn hdr_output_levels_are_in_scrgb_units() {
+        let output = Output::Scrgb {
+            sdr_white_nits: 240.0,
+            peak_nits: 1000.0,
+        };
+        let params = ColorParams::new(bt709_limited(), EIGHT_BIT, None, output);
+        assert_eq!(params.output, [1.0, 3.0, 12.5, 0.0]);
+        assert_eq!(params.misc[3], 1.0);
     }
 }

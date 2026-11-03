@@ -9,5 +9,12 @@ publish.workspace = true
 media.workspace = true
 wgpu.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi_Common",
+] }
+
 [lints]
 workspace = true

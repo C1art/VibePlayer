@@ -92,6 +92,44 @@ fn copied_video_packets_are_byte_identical_to_the_source() {
 
 #[test]
 #[ignore]
+fn transport_streams_with_b_frames_start_on_the_keyframe() {
+    // MPEG-TS seeks by decode time, which for a keyframe comes before its presentation time.
+    let source = fixture("h264_bframes.ts");
+    let out = output("bframes.ts");
+    let plan = plan(&source, 1.3, 2.6);
+    export(&source, &out, plan, AudioChanges::default()).unwrap();
+    let expected = video_payloads(&source, |p| plan.keeps_primary(p.pts().unwrap(), p.dts()));
+    assert_eq!(video_payloads(&out, |_| true), expected);
+}
+
+#[test]
+#[ignore]
+fn a_subtitle_running_past_the_end_stops_there() {
+    // The fixture's second cue runs from 2.0 s to 3.0 s; the cut ends at 2.5 s.
+    let source = fixture("multi_audio.mkv");
+    let out = output("subtitle_end.mkv");
+    export(
+        &source,
+        &out,
+        plan(&source, 0.5, 2.5),
+        AudioChanges::default(),
+    )
+    .unwrap();
+    let mut demuxer = Demuxer::open(&out).unwrap();
+    let stream = demuxer.best_stream(StreamKind::Subtitle).unwrap();
+    let timebase = demuxer.timebase(stream).unwrap();
+    demuxer.select_streams(&[stream]);
+    let mut packet = Packet::new().unwrap();
+    let mut last_end = Ticks::ZERO;
+    while demuxer.read(&mut packet).unwrap() {
+        last_end = packet.pts().unwrap() + packet.duration();
+    }
+    let seconds = last_end.display_seconds(timebase);
+    assert!((2.4..=2.55).contains(&seconds), "{seconds}");
+}
+
+#[test]
+#[ignore]
 fn every_stream_survives_the_cut() {
     let source = fixture("multi_audio.mkv");
     let out = output("streams.mkv");
@@ -113,6 +151,25 @@ fn every_stream_survives_the_cut() {
 
 #[test]
 #[ignore]
+fn cover_art_survives_a_cut_that_starts_later() {
+    let source = fixture("cover_art.mp4");
+    let out = output("cover_art.mp4");
+    export(
+        &source,
+        &out,
+        plan(&source, 1.0, 1.8),
+        AudioChanges::default(),
+    )
+    .unwrap();
+    let info = media::probe(&out).unwrap();
+    let pictures = info.streams.iter().filter(|stream| {
+        matches!(&stream.details, media::StreamDetails::Video(video) if video.attached_picture)
+    });
+    assert_eq!(pictures.count(), 1);
+}
+
+#[test]
+#[ignore]
 fn volume_changes_reencode_only_the_audio() {
     let source = fixture("h264_bframes.mp4");
     let out = output("louder.mp4");
@@ -130,6 +187,63 @@ fn volume_changes_reencode_only_the_audio() {
         info.streams_of(StreamKind::Audio).next().unwrap().codec,
         "aac"
     );
+}
+
+#[test]
+#[ignore]
+fn reencoded_audio_is_cut_to_the_sample() {
+    let source = fixture("h264_bframes.mp4");
+    let out = output("trimmed_audio.mp4");
+    let changes = AudioChanges {
+        gain: Decibels(-30),
+        ..AudioChanges::default()
+    };
+    export(&source, &out, plan(&source, 1.0, 3.0), changes).unwrap();
+    let samples = decoded_audio_samples(&out);
+    // Two seconds at 48 kHz; AAC can't end mid-frame, so allow the padding of one frame.
+    assert!((96_000..96_000 + 1_024).contains(&samples), "{samples}");
+}
+
+#[test]
+#[ignore]
+fn reencoded_audio_in_matroska_keeps_its_length() {
+    // Matroska's millisecond timebase differs from the sample rate, unlike MP4's audio.
+    let source = fixture("multi_audio.mkv");
+    let out = output("trimmed_audio.mkv");
+    let changes = AudioChanges {
+        gain: Decibels(-30),
+        ..AudioChanges::default()
+    };
+    export(&source, &out, plan(&source, 0.5, 3.0), changes).unwrap();
+    let samples = decoded_audio_samples(&out);
+    assert!((143_000..146_000).contains(&samples), "{samples}");
+}
+
+fn decoded_audio_samples(path: &Path) -> u64 {
+    let mut demuxer = Demuxer::open(path).unwrap();
+    let stream = demuxer.best_stream(StreamKind::Audio).unwrap();
+    demuxer.select_streams(&[stream]);
+    let target = media::AudioTarget {
+        sample_format: "flt".into(),
+        sample_rate: 48_000,
+        layout: "mono".into(),
+        frame_size: None,
+    };
+    let params = demuxer.stream_params(stream).unwrap();
+    let mut decoder =
+        media::AudioDecoder::new(params, target, media::AudioEffects::default()).unwrap();
+    let mut packet = Packet::new().unwrap();
+    let mut samples = 0;
+    loop {
+        let more = demuxer.read(&mut packet).unwrap();
+        decoder.send(more.then_some(&packet)).unwrap();
+        while let Some(frame) = decoder.receive().unwrap() {
+            samples += frame.samples().len() as u64;
+        }
+        if !more {
+            return samples;
+        }
+    }
 }
 
 #[test]

@@ -4,10 +4,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use cut::{CutPlan, StreamIndex, Ticks, Timebase};
 use media::{
     AudioDecoder, AudioEffects, AudioEncoder, Chapter, Decibels, Demuxer, Equalizer, Muxer, Packet,
-    StreamKind,
+    StreamDetails, StreamInfo, StreamKind,
 };
 
 use crate::ExportError;
+use crate::lead_in::{self, SubtitleOutput};
 use crate::smart::SmartHead;
 
 /// Audio edits that force audio, and only audio, to be re-encoded.
@@ -34,6 +35,11 @@ enum Output {
         output_timebase: Timebase,
     },
     Encode(Box<Reencode>),
+    /// Cover art: one packet with no place on the timeline, kept whatever the cut.
+    Picture {
+        index: StreamIndex,
+        written: bool,
+    },
 }
 
 struct Reencode {
@@ -50,6 +56,8 @@ pub(crate) struct Remuxed {
     pub reencoded_frames: usize,
     pub streams: usize,
     pub reencoded_audio: bool,
+    /// The cut-on stream in the output, when it is video.
+    pub video: Option<StreamIndex>,
 }
 
 pub(crate) fn remux(
@@ -80,6 +88,7 @@ pub(crate) fn remux(
             let effects = AudioEffects {
                 gain: audio.gain,
                 equalizer: audio.equalizer,
+                trim: Some(plan.range_in(Timebase::MICROS)),
                 ..AudioEffects::default()
             };
             let decoder = AudioDecoder::new(params, encoder.target(), effects)?;
@@ -95,6 +104,10 @@ pub(crate) fn remux(
             })))
         } else {
             match muxer.add_copied_stream(&demuxer, stream.index) {
+                Ok(index) if is_attached_picture(stream) => Some(Output::Picture {
+                    index,
+                    written: false,
+                }),
                 Ok(index) => Some(Output::Copy {
                     index,
                     input_timebase,
@@ -117,6 +130,7 @@ pub(crate) fn remux(
                 output_timebase,
                 ..
             } => *output_timebase = muxer.timebase(*index).unwrap_or(*output_timebase),
+            Output::Picture { .. } => {}
             Output::Encode(reencode) => {
                 reencode.output_timebase = muxer
                     .timebase(reencode.index)
@@ -145,15 +159,42 @@ pub(crate) fn remux(
         _ => None,
     };
     let mut reencoded_frames = 0;
+    let subtitles: Vec<SubtitleOutput> = info
+        .streams
+        .iter()
+        .filter(|stream| stream.kind == StreamKind::Subtitle)
+        .filter_map(|stream| match outputs.get(stream.index.0) {
+            Some(Some(Output::Copy {
+                index,
+                input_timebase,
+                output_timebase,
+            })) => Some(SubtitleOutput {
+                input: stream.index,
+                output: *index,
+                input_timebase: *input_timebase,
+                output_timebase: *output_timebase,
+            }),
+            _ => None,
+        })
+        .collect();
+    lead_in::write_cues_on_screen(source, plan, &subtitles, &mut muxer)?;
     let decode_from = plan.reencode.map_or(plan.start, |head| head.decode_from);
     demuxer.seek_stream(plan.stream, decode_from)?;
+    // The seek can land on an earlier keyframe (formats that seek by decode time); everything
+    // of the primary stream before the planned one is left out.
+    let mut reached_start = false;
+    let is_subtitle: Vec<bool> = info
+        .streams
+        .iter()
+        .map(|stream| stream.kind == StreamKind::Subtitle)
+        .collect();
 
     let mut packet = Packet::new()?;
     let mut finished = vec![false; outputs.len()];
     let needs_finish: Vec<bool> = info
         .streams
         .iter()
-        .map(|s| matches!(s.kind, StreamKind::Video | StreamKind::Audio))
+        .map(|s| matches!(s.kind, StreamKind::Video | StreamKind::Audio) && !is_attached_picture(s))
         .collect();
     while demuxer.read(&mut packet)? {
         if cancel.load(Ordering::Relaxed) {
@@ -180,6 +221,12 @@ pub(crate) fn remux(
                 {
                     finished[input_index.0] = true;
                 }
+                if input_index == plan.stream && !reached_start {
+                    if !(packet.is_keyframe() && pts >= decode_from) {
+                        continue;
+                    }
+                    reached_start = true;
+                }
                 let keep = if input_index == plan.stream {
                     if let Some(fraction) = fraction_done(plan, pts) {
                         progress(fraction);
@@ -200,7 +247,24 @@ pub(crate) fn remux(
                     plan.keeps_other(pts, timebase)
                 };
                 if keep {
+                    if is_subtitle[input_index.0] {
+                        // A cue running past the end stops there, as the clip does.
+                        let end = plan.range_in(timebase).1;
+                        if packet.duration() > Ticks::ZERO && pts + packet.duration() > end {
+                            packet.set_duration(end - pts);
+                        }
+                    }
                     restamp(&mut packet, plan, timebase, out_timebase, out_index);
+                    muxer.write(&mut packet)?;
+                }
+            }
+            Output::Picture { index, written } => {
+                if !*written {
+                    *written = true;
+                    packet.set_timestamps(Some(Ticks::ZERO), Some(Ticks::ZERO));
+                    packet.set_duration(Ticks::ZERO);
+                    packet.set_stream_index(*index);
+                    packet.clear_position();
                     muxer.write(&mut packet)?;
                 }
             }
@@ -240,16 +304,26 @@ pub(crate) fn remux(
             reencode.drain_encoder(&mut muxer, true)?;
         }
     }
+    // Stopping here keeps a cancel from being outlasted by the trailer and verification.
+    if cancel.load(Ordering::Relaxed) {
+        return Err(ExportError::Cancelled);
+    }
     muxer.finish()?;
     progress(1.0);
+    let video = info
+        .streams
+        .get(plan.stream.0)
+        .filter(|stream| stream.kind == StreamKind::Video)
+        .and(primary_output.map(|(index, _, _)| index));
     Ok(Remuxed {
         reencoded_frames,
         streams,
         reencoded_audio,
+        video,
     })
 }
 
-fn restamp(
+pub(crate) fn restamp(
     packet: &mut Packet,
     plan: &CutPlan,
     input: Timebase,
@@ -266,13 +340,17 @@ fn restamp(
     packet.clear_position();
 }
 
+fn is_attached_picture(stream: &StreamInfo) -> bool {
+    matches!(&stream.details, StreamDetails::Video(video) if video.attached_picture)
+}
+
 fn fraction_done(plan: &CutPlan, pts: Ticks) -> Option<f32> {
     let total = plan.duration().0;
     (total > 0).then(|| ((pts - plan.start).0 as f32 / total as f32).clamp(0.0, 1.0))
 }
 
 impl Reencode {
-    /// Decodes a packet (or drains with `None`), trims to the cut by sample time, and encodes.
+    /// Decodes a packet (or drains with `None`) and encodes what the decoder's trim keeps.
     fn feed(
         &mut self,
         packet: Option<&Packet>,
@@ -292,12 +370,18 @@ impl Reencode {
                 if frame_end <= start || pts >= end {
                     continue;
                 }
-                let at = *self.next_sample.get_or_insert_with(|| {
-                    (pts - start)
-                        .max(Ticks::ZERO)
-                        .rescale(Timebase::MICROS, rate_timebase)
-                        .0
-                });
+                let placed = (pts - start)
+                    .max(Ticks::ZERO)
+                    .rescale(Timebase::MICROS, rate_timebase)
+                    .0;
+                // Back to back, unless the source has a real gap here (over 20 ms), which
+                // must stay or everything after it would play early.
+                let gap = self.sample_rate / 50;
+                let at = match self.next_sample {
+                    Some(next) if placed > next + gap => placed,
+                    Some(next) => next,
+                    None => placed,
+                };
                 frame.set_pts(Ticks(at));
                 self.next_sample = Some(at + samples);
                 while !self.encoder.send(Some(&frame))? {

@@ -40,6 +40,7 @@ pub struct ExportJob {
     progress: Receiver<Progress>,
     cancel: Arc<AtomicBool>,
     fraction: f32,
+    worker: Option<thread::JoinHandle<()>>,
 }
 
 impl ExportJob {
@@ -57,13 +58,18 @@ impl ExportJob {
                 let _ = sender.send(Progress::Done(result));
             }
         });
-        if let Err(error) = spawned {
-            let _ = sender.send(Progress::Done(Err(ExportError::Io(error))));
-        }
+        let worker = match spawned {
+            Ok(worker) => Some(worker),
+            Err(error) => {
+                let _ = sender.send(Progress::Done(Err(ExportError::Io(error))));
+                None
+            }
+        };
         ExportJob {
             progress,
             cancel,
             fraction: 0.0,
+            worker,
         }
     }
 
@@ -87,6 +93,17 @@ impl ExportJob {
     }
 }
 
+/// Dropping a running job cancels it and waits for the worker to remove its temp file, which
+/// takes no longer than one packet.
+impl Drop for ExportJob {
+    fn drop(&mut self) {
+        self.cancel();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
 /// Exports synchronously; [`ExportJob`] runs this on a worker.
 pub fn run(
     request: &ExportRequest,
@@ -100,6 +117,10 @@ pub fn run(
         return Err(ExportError::OutputExists(request.output.clone()));
     }
     let temp = temp_path(&request.output);
+    // A leftover temp file opened as the source would be truncated by writing the temp.
+    if same_file(&request.source, &temp) {
+        return Err(ExportError::WouldOverwriteSource(temp));
+    }
     let result = remux(
         &request.source,
         &temp,
@@ -113,7 +134,10 @@ pub fn run(
             .plan
             .duration()
             .rescale(request.plan.timebase, Timebase::MICROS);
-        let duration = verify(&temp, remuxed.streams, expected)?;
+        let duration = verify(&temp, remuxed.streams, remuxed.video, expected)?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(ExportError::Cancelled);
+        }
         if request.output.exists() {
             return Err(ExportError::OutputExists(request.output.clone()));
         }

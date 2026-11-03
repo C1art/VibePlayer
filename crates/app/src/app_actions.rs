@@ -7,8 +7,10 @@ use playback::SeekMode;
 
 use crate::actions::{self, Action};
 use crate::app::VibePlayerApp;
+use crate::chapters;
 use crate::controls::format_speed;
 use crate::os;
+use crate::subtitles::SubtitleOverlay;
 
 impl VibePlayerApp {
     pub(crate) fn apply(&mut self, ctx: &egui::Context, action: Action, now: Instant) {
@@ -22,19 +24,15 @@ impl VibePlayerApp {
                 }
             }
             Action::Open(path) => {
-                if self
-                    .editor
-                    .as_ref()
-                    .is_some_and(|editor| editor.is_exporting())
-                {
-                    self.osd.show("Finish or cancel the export first");
-                } else {
+                if !self.export_in_the_way() {
                     self.open(path, now);
                 }
             }
             Action::CloseFile => {
-                self.close_file();
-                ctx.send_viewport_cmd(egui::ViewportCommand::Title("VibePlayer".into()));
+                if !self.export_in_the_way() {
+                    self.close_file();
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Title("VibePlayer".into()));
+                }
             }
             Action::ToggleFullscreen => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!self.fullscreen));
@@ -56,7 +54,7 @@ impl VibePlayerApp {
             }
             Action::ToggleHelp => self.help_open = !self.help_open,
             Action::ToggleSettings => self.settings_open = !self.settings_open,
-            Action::ToggleEditor => self.toggle_editor(),
+            Action::ToggleEditor => self.toggle_editor(ctx),
             Action::TrimStartHere => self.set_trim_point(true),
             Action::TrimEndHere => self.set_trim_point(false),
             Action::Editor(action) => self.apply_editor(action, now),
@@ -89,6 +87,32 @@ impl VibePlayerApp {
             }
             Action::StepForward => player.step_forward(now),
             Action::StepBack => player.step_backward(now),
+            Action::NextChapter | Action::PreviousChapter => {
+                let marks = &session.chapters;
+                let position = player.position();
+                let target = if action == Action::NextChapter {
+                    chapters::next(marks, position)
+                } else {
+                    chapters::previous(marks, position)
+                };
+                match target {
+                    Some(index) => {
+                        player.seek(marks[index].start, SeekMode::Exact);
+                        self.osd.show(chapters::label(marks, index));
+                    }
+                    None if marks.is_empty() => self.osd.show("No chapters"),
+                    None if action == Action::NextChapter => self.osd.show("Last chapter"),
+                    // Before the first chapter, or in it: back to the start of the file.
+                    None => {
+                        player.seek(Ticks::ZERO, SeekMode::Exact);
+                        self.osd.show(if marks[0].start <= position {
+                            chapters::label(marks, 0)
+                        } else {
+                            "Start".into()
+                        });
+                    }
+                }
+            }
             Action::VolumeBy(delta) => {
                 let volume = player.volume().step(delta);
                 player.set_volume(volume);
@@ -117,7 +141,11 @@ impl VibePlayerApp {
             }
             Action::SetSpeed(speed) => self.set_speed(speed),
             Action::SelectAudio(stream) => player.select_audio(stream),
-            Action::SelectSubtitle(stream) => player.select_subtitle(stream),
+            Action::SelectSubtitle(stream) => {
+                player.select_subtitle(stream);
+                // Image cues are cached by start time, which another track can share.
+                self.subtitles = SubtitleOverlay::default();
+            }
             Action::CycleAudio => {
                 let current = player.opened().and_then(|o| o.audio);
                 if let Some(next) = self.cycle_stream(StreamKind::Audio, current, false)
@@ -133,6 +161,7 @@ impl VibePlayerApp {
                     && let Some(session) = &mut self.session
                 {
                     session.player.select_subtitle(next);
+                    self.subtitles = SubtitleOverlay::default();
                     self.osd.show(stream_osd("Subtitles", session, next));
                 }
             }

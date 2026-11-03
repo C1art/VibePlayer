@@ -14,7 +14,7 @@ mod reader;
 mod subtitle_list;
 mod video_worker;
 
-pub use clock::{AudioAnchor, AudioReading, Clock, Generation};
+pub use clock::{AnchorPair, AudioAnchor, AudioReading, Clock, Generation};
 pub use error::PlaybackError;
 pub use frame_queue::{FrameQueue, Shown, Timed};
 pub use messages::Opened;

@@ -82,6 +82,16 @@ impl CodecContext {
         stream: &StreamParams,
         hardware: Option<HwDevice>,
     ) -> Result<CodecContext, MediaError> {
+        Self::decoder_on(stream, hardware, None)
+    }
+
+    /// Like [`CodecContext::decoder`], with hardware decoding on the adapter with this index
+    /// (the system's order) instead of the default one.
+    pub fn decoder_on(
+        stream: &StreamParams,
+        hardware: Option<HwDevice>,
+        adapter: Option<u32>,
+    ) -> Result<CodecContext, MediaError> {
         let params = stream.view();
         let codec_id = params.raw().codec_id;
         // SAFETY: avcodec_find_decoder returns a static codec or null.
@@ -100,7 +110,7 @@ impl CodecContext {
             (*raw).thread_count = 0;
         }
         if let Some(device) = hardware {
-            context.hardware = context.attach_hardware(codec, device);
+            context.hardware = context.attach_hardware(codec, device, adapter);
         }
         // SAFETY: the context was allocated for `codec` and is opened once.
         let code = unsafe { sys::avcodec_open2(raw, codec, ptr::null_mut()) };
@@ -108,21 +118,24 @@ impl CodecContext {
         Ok(context)
     }
 
-    fn attach_hardware(&mut self, codec: *const sys::AVCodec, device: HwDevice) -> bool {
+    fn attach_hardware(
+        &mut self,
+        codec: *const sys::AVCodec,
+        device: HwDevice,
+        adapter: Option<u32>,
+    ) -> bool {
         let Some(pixel_format) = hardware_pixel_format(codec, device) else {
             return false;
         };
         let mut device_context = ptr::null_mut();
-        // SAFETY: `device_context` is a valid out-pointer; null device name and options select
-        // the default adapter.
+        let adapter = adapter.and_then(|index| std::ffi::CString::new(index.to_string()).ok());
+        let name = adapter
+            .as_deref()
+            .map_or(ptr::null(), std::ffi::CStr::as_ptr);
+        // SAFETY: `device_context` is a valid out-pointer; `name` is null (the default adapter)
+        // or a NUL-terminated adapter index that outlives the call; options are null.
         let code = unsafe {
-            sys::av_hwdevice_ctx_create(
-                &mut device_context,
-                device.raw(),
-                ptr::null(),
-                ptr::null_mut(),
-                0,
-            )
+            sys::av_hwdevice_ctx_create(&mut device_context, device.raw(), name, ptr::null_mut(), 0)
         };
         if code < 0 || device_context.is_null() {
             return false;

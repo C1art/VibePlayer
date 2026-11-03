@@ -1,7 +1,7 @@
 // Filled in by build.rs.
 #include <winver.h>
 
-1 ICON "@ICON@"
+@ICONS@
 
 1 VERSIONINFO
 FILEVERSION @VERSION_NUMBERS@

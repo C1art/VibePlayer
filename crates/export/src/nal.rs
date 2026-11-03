@@ -108,24 +108,36 @@ pub fn split_annex_b(data: &[u8]) -> Vec<&[u8]> {
 }
 
 /// Frames `units` for a stream of the given format.
-pub fn frame<'a>(units: impl IntoIterator<Item = &'a [u8]>, format: NalFormat) -> Vec<u8> {
+/// `None` when a unit is too long for the length field (sources may use 1 or 2 bytes).
+pub fn frame<'a>(units: impl IntoIterator<Item = &'a [u8]>, format: NalFormat) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     for unit in units {
         match format {
             NalFormat::AnnexB => out.extend_from_slice(&[0, 0, 0, 1]),
             NalFormat::LengthPrefixed(size) => {
-                let length = (unit.len() as u64).to_be_bytes();
-                out.extend_from_slice(&length[8 - usize::from(size)..]);
+                let size = usize::from(size).min(8);
+                let length = unit.len() as u64;
+                if size < 8 && length >> (size * 8) != 0 {
+                    return None;
+                }
+                out.extend_from_slice(&length.to_be_bytes()[8 - size..]);
             }
         }
         out.extend_from_slice(unit);
     }
-    out
+    Some(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn units_too_long_for_the_length_field_are_refused() {
+        let unit = vec![0x65; 70_000];
+        assert!(frame([unit.as_slice()], NalFormat::LengthPrefixed(2)).is_none());
+        assert!(frame([unit.as_slice()], NalFormat::LengthPrefixed(4)).is_some());
+    }
 
     #[test]
     fn annex_b_splits_on_three_and_four_byte_start_codes() {
@@ -140,7 +152,7 @@ mod tests {
 
     #[test]
     fn units_are_reframed_with_length_prefixes() {
-        let framed = frame([&[0x67, 1, 2][..], &[0x68]], NalFormat::LengthPrefixed(4));
+        let framed = frame([&[0x67, 1, 2][..], &[0x68]], NalFormat::LengthPrefixed(4)).unwrap();
         assert_eq!(framed, [0, 0, 0, 3, 0x67, 1, 2, 0, 0, 0, 1, 0x68]);
     }
 

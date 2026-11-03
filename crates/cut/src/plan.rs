@@ -72,6 +72,23 @@ impl TrimRequest {
         })
     }
 
+    /// Plans a cut from the first keyframe, after the requested start, for when no keyframe
+    /// comes before it (audio that starts before the first picture). Nothing before that
+    /// keyframe can be decoded, so the start moves forward to it, and the plan says so.
+    pub fn plan_from_first_keyframe(&self, first_keyframe: Ticks) -> Result<CutPlan, CutError> {
+        if self.end <= first_keyframe.max(self.start) {
+            return Err(CutError::EmptyRange);
+        }
+        Ok(CutPlan {
+            stream: self.stream,
+            timebase: self.timebase,
+            requested_start: self.start,
+            start: first_keyframe.max(self.start),
+            end: self.end,
+            reencode: None,
+        })
+    }
+
     /// Plans a frame-accurate cut that re-encodes from the start to `next_keyframe` (or the end,
     /// if that comes first). `frames` is how many frames that is. Falls back to a plain
     /// lossless plan when the start already is a keyframe.
@@ -79,7 +96,7 @@ impl TrimRequest {
         &self,
         keyframe_before: Option<Ticks>,
         next_keyframe: Option<Ticks>,
-        frames: u32,
+        frame_times: &[Ticks],
     ) -> Result<CutPlan, CutError> {
         if keyframe_before == Some(self.start) {
             return self.plan(keyframe_before);
@@ -87,12 +104,18 @@ impl TrimRequest {
         let mut plan = self.plan(keyframe_before)?;
         let decode_from = plan.start;
         plan.start = self.start;
+        let until = next_keyframe
+            .filter(|&next| next > self.start && next < self.end)
+            .unwrap_or(self.end);
+        // Counted up to where re-encoding stops: the next keyframe, or the end if sooner.
+        let frames = frame_times
+            .iter()
+            .filter(|&&time| time >= self.start && time < until)
+            .count();
         plan.reencode = Some(ReencodedHead {
             decode_from,
-            until: next_keyframe
-                .filter(|&next| next > self.start && next < self.end)
-                .unwrap_or(self.end),
-            frames,
+            until,
+            frames: u32::try_from(frames).unwrap_or(u32::MAX),
         });
         Ok(plan)
     }
@@ -140,6 +163,19 @@ impl CutPlan {
         pts >= start && pts < end
     }
 
+    /// For a cue shown from `pts` for `duration` (in `timebase`) that starts before the cut:
+    /// the part still on screen when the cut begins, as a new start and duration.
+    pub fn on_screen_at_start(
+        &self,
+        pts: Ticks,
+        duration: Ticks,
+        timebase: Timebase,
+    ) -> Option<(Ticks, Ticks)> {
+        let (start, end) = self.range_in(timebase);
+        let cue_end = pts + duration;
+        (pts < start && cue_end > start).then(|| (start, cue_end.min(end) - start))
+    }
+
     /// Moves a timestamp so the cut starts at zero.
     pub fn rebase(&self, ticks: Ticks, timebase: Timebase) -> Ticks {
         ticks - self.start.rescale(self.timebase, timebase)
@@ -157,6 +193,41 @@ impl CutPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_start_before_the_first_keyframe_moves_forward_to_it() {
+        let request = TrimRequest {
+            stream: StreamIndex(0),
+            timebase: Timebase::MILLIS,
+            start: Ticks(-21),
+            end: Ticks(3_000),
+        };
+        let plan = request.plan_from_first_keyframe(Ticks(0)).unwrap();
+        assert_eq!(plan.start, Ticks(0));
+        assert_eq!(plan.start_shift(), Ticks(-21));
+        assert_eq!(
+            request.plan_from_first_keyframe(Ticks(3_000)),
+            Err(CutError::EmptyRange)
+        );
+    }
+
+    #[test]
+    fn a_cue_still_showing_at_the_start_is_shortened_to_begin_there() {
+        let plan = CutPlan {
+            stream: StreamIndex(0),
+            timebase: Timebase::MILLIS,
+            requested_start: Ticks(5_000),
+            start: Ticks(5_000),
+            end: Ticks(9_000),
+            reencode: None,
+        };
+        let cue =
+            |pts, duration| plan.on_screen_at_start(Ticks(pts), Ticks(duration), Timebase::MILLIS);
+        assert_eq!(cue(4_800, 2_200), Some((Ticks(5_000), Ticks(2_000))));
+        assert_eq!(cue(4_000, 9_000), Some((Ticks(5_000), Ticks(4_000))));
+        assert_eq!(cue(4_000, 500), None);
+        assert_eq!(cue(5_000, 500), None);
+    }
 
     fn ms() -> Timebase {
         Timebase::MILLIS
@@ -237,10 +308,19 @@ mod tests {
         assert_eq!(plan.rebase(Ticks(5_040), ms()), Ticks(40));
     }
 
+    /// One frame every 40 ms from `from` up to (not including) `to`.
+    fn frames(from: i64, to: i64) -> Vec<Ticks> {
+        (from..to).step_by(40).map(Ticks).collect()
+    }
+
     #[test]
     fn smart_cuts_keep_the_start_and_copy_from_the_next_keyframe() {
         let plan = request(5_300, 9_000)
-            .plan_smart(Some(Ticks(5_000)), Some(Ticks(6_000)), 18)
+            .plan_smart(
+                Some(Ticks(5_000)),
+                Some(Ticks(6_000)),
+                &frames(5_300, 6_000),
+            )
             .unwrap();
         assert_eq!(plan.start, Ticks(5_300));
         assert_eq!(plan.start_shift(), Ticks::ZERO);
@@ -257,7 +337,7 @@ mod tests {
     #[test]
     fn smart_cuts_starting_on_a_keyframe_stay_lossless() {
         let plan = request(5_000, 9_000)
-            .plan_smart(Some(Ticks(5_000)), Some(Ticks(6_000)), 0)
+            .plan_smart(Some(Ticks(5_000)), Some(Ticks(6_000)), &[])
             .unwrap();
         assert_eq!(plan.reencode, None);
     }
@@ -265,9 +345,16 @@ mod tests {
     #[test]
     fn a_smart_cut_inside_one_gop_re_encodes_everything_and_copies_nothing() {
         let plan = request(5_300, 5_800)
-            .plan_smart(Some(Ticks(5_000)), Some(Ticks(6_000)), 12)
+            .plan_smart(
+                Some(Ticks(5_000)),
+                Some(Ticks(6_000)),
+                &frames(5_300, 6_000),
+            )
             .unwrap();
-        assert_eq!(plan.reencode.unwrap().until, Ticks(5_800));
+        let head = plan.reencode.unwrap();
+        assert_eq!(head.until, Ticks(5_800));
+        // Counted up to the end, not the next keyframe: 5.30, 5.34, ... 5.78.
+        assert_eq!(head.frames, 13);
         assert!(!plan.keeps_primary(Ticks(6_000), Some(Ticks(5_700))));
     }
 

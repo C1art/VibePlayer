@@ -22,6 +22,8 @@ pub enum Action {
     },
     /// Jump to a tenth of the duration, 0–9.
     SeekToTenth(u8),
+    NextChapter,
+    PreviousChapter,
     StepForward,
     StepBack,
     VolumeBy(i32),

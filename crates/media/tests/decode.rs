@@ -18,6 +18,8 @@ fn fixture(name: &str) -> PathBuf {
 const SOFTWARE: VideoOptions = VideoOptions {
     hardware: HardwareDecoding::Off,
     high_bit_depth: true,
+    deinterlace: true,
+    gpu: None,
 };
 
 fn decode_video(name: &str, options: VideoOptions) -> Vec<VideoFrame> {
@@ -228,7 +230,7 @@ fn keyframe_span_counts_frames_until_the_next_keyframe() {
     assert_eq!(span.before, Some(at(2.0)));
     assert_eq!(span.after, Some(at(3.0)));
     // 2.60, 2.64, … 2.96: ten frames at 25 fps.
-    assert_eq!(span.frames_until_after, 10);
+    assert_eq!(span.frames_until_after(), 10);
 }
 
 #[test]

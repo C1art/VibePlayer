@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use cut::Ticks;
+use eframe::egui;
 use playback::SeekMode;
 
 use crate::app::{VibePlayerApp, unix_now};
@@ -8,9 +9,20 @@ use crate::editor::{Editor, EditorAction};
 use crate::os;
 
 impl VibePlayerApp {
-    pub(crate) fn toggle_editor(&mut self) {
+    /// Says so and returns `true` while an export runs, which closing the editor would cancel.
+    pub(crate) fn export_in_the_way(&mut self) -> bool {
+        let exporting = self.editor.as_ref().is_some_and(Editor::is_exporting);
+        if exporting {
+            self.osd.show("Finish or cancel the export first");
+        }
+        exporting
+    }
+
+    pub(crate) fn toggle_editor(&mut self, ctx: &egui::Context) {
         if self.editor.is_some() {
-            self.close_editor();
+            if !self.export_in_the_way() {
+                self.close_editor();
+            }
             return;
         }
         let Some(session) = &mut self.session else {
@@ -20,7 +32,13 @@ impl VibePlayerApp {
             return;
         };
         let saved = self.history.cut_session(&opened.info.path);
-        match Editor::new(&opened.info, opened.audio, saved, &self.settings.editor) {
+        match Editor::new(
+            &opened.info,
+            opened.audio,
+            saved,
+            &self.settings.editor,
+            ctx,
+        ) {
             Some(editor) => {
                 session
                     .player
@@ -37,11 +55,14 @@ impl VibePlayerApp {
         let Some(editor) = self.editor.take() else {
             return;
         };
-        if editor.start > Ticks::ZERO
+        let edited = editor.start > Ticks::ZERO
             || editor.end < editor.duration()
-            || !editor.audio_changes().is_none()
-        {
+            || !editor.audio_changes().is_none();
+        if edited {
             self.history.save_cut_session(editor.session(unix_now()));
+            self.save_history();
+        } else if self.history.forget_cut_session(editor.source()) {
+            // Reset to the whole file: an older trim must not come back next time.
             self.save_history();
         }
         if let Some(session) = &mut self.session {
@@ -70,7 +91,11 @@ impl VibePlayerApp {
 
     pub(crate) fn apply_editor(&mut self, action: EditorAction, now: Instant) {
         match action {
-            EditorAction::Close => self.close_editor(),
+            EditorAction::Close => {
+                if !self.export_in_the_way() {
+                    self.close_editor();
+                }
+            }
             EditorAction::OpenFile => {
                 if self.open_dialog.is_none() {
                     self.open_dialog = os::open_file_dialog();
@@ -107,21 +132,29 @@ impl VibePlayerApp {
                     editor.cancel_export();
                 }
             }
-            EditorAction::Open(path) => self.open(path, now),
+            EditorAction::Open(path) => {
+                if !self.export_in_the_way() {
+                    self.open(path, now);
+                }
+            }
             EditorAction::ShowInFolder(path) => os::show_in_folder(&path),
             other => {
-                let (Some(session), Some(editor)) = (&mut self.session, &self.editor) else {
+                let (Some(session), Some(editor)) = (&mut self.session, &mut self.editor) else {
                     return;
                 };
                 let player = &mut session.player;
                 match other {
                     EditorAction::TogglePlay => player.toggle_play(now),
-                    EditorAction::Seek(position, mode) => player.seek(position, mode),
+                    EditorAction::Seek(position, mode) => {
+                        player.seek(position, mode);
+                        editor.previewing = false;
+                    }
                     EditorAction::StepBack => player.step_backward(now),
                     EditorAction::StepForward => player.step_forward(now),
                     EditorAction::PreviewSelection => {
                         player.seek(editor.start, SeekMode::Exact);
                         player.play(now);
+                        editor.previewing = true;
                     }
                     EditorAction::AudioChanged => {
                         player.set_audio_edits(editor.gain, editor.equalizer);
@@ -129,6 +162,27 @@ impl VibePlayerApp {
                     _ => {}
                 }
             }
+        }
+    }
+}
+
+impl VibePlayerApp {
+    /// A selection preview pauses at the out point.
+    pub(crate) fn end_preview(&mut self) {
+        let (Some(editor), Some(session)) = (&mut self.editor, &mut self.session) else {
+            return;
+        };
+        if !editor.previewing {
+            return;
+        }
+        let player = &mut session.player;
+        if !player.is_playing() || player.is_seeking() {
+            editor.previewing = player.is_seeking();
+            return;
+        }
+        if player.position() >= editor.end {
+            player.pause();
+            editor.previewing = false;
         }
     }
 }

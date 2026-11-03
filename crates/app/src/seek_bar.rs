@@ -4,6 +4,7 @@ use cut::{ClockPrecision, ClockTime, Ticks, Timebase};
 use eframe::egui::{self, Color32, CornerRadius, Rect, Sense, Stroke, TextureHandle, pos2, vec2};
 use media::RgbaImage;
 
+use crate::chapters::{self, ChapterMark};
 use crate::theme;
 
 /// What the user did with the seek bar this frame.
@@ -27,6 +28,7 @@ pub struct SeekBar<'a> {
     pub position: Ticks,
     pub duration: Ticks,
     pub highlight: Option<Range>,
+    pub chapters: &'a [ChapterMark],
     pub preview: Option<&'a mut dyn FnMut(Ticks) -> Option<TextureHandle>>,
 }
 
@@ -53,7 +55,7 @@ impl SeekBar<'_> {
             painter.rect_filled(
                 span,
                 CornerRadius::same(3),
-                theme::ACCENT.gamma_multiply(0.45),
+                theme::accent().gamma_multiply(0.45),
             );
         }
         let mut input = SeekInput::default();
@@ -63,7 +65,13 @@ impl SeekBar<'_> {
             _ => self.position,
         };
         let played = Rect::from_x_y_ranges(track.left()..=to_x(displayed), track.y_range());
-        painter.rect_filled(played, CornerRadius::same(3), theme::ACCENT);
+        painter.rect_filled(played, CornerRadius::same(3), theme::accent());
+        // Chapters show as small gaps cut into the track.
+        for mark in self.chapters.iter().filter(|mark| mark.start > Ticks::ZERO) {
+            let x = to_x(mark.start);
+            let gap = Rect::from_x_y_ranges(x - 1.0..=x + 1.0, track.y_range());
+            painter.rect_filled(gap, CornerRadius::ZERO, theme::BACKGROUND);
+        }
         if active {
             painter.circle_filled(pos2(to_x(displayed), rect.center().y), 7.0, theme::TEXT);
         }
@@ -78,7 +86,9 @@ impl SeekBar<'_> {
             if response.hovered() || response.dragged() {
                 input.hover = Some(at);
                 if let Some(preview) = self.preview {
-                    paint_hover(ui, rect, to_x(at), at, preview(at));
+                    let chapter = chapters::current(self.chapters, at)
+                        .and_then(|index| self.chapters[index].title.as_deref());
+                    paint_hover(ui, rect, to_x(at), at, chapter, preview(at));
                 }
             }
         }
@@ -86,12 +96,23 @@ impl SeekBar<'_> {
     }
 }
 
-fn paint_hover(ui: &egui::Ui, bar: Rect, x: f32, at: Ticks, thumbnail: Option<TextureHandle>) {
+fn paint_hover(
+    ui: &egui::Ui,
+    bar: Rect,
+    x: f32,
+    at: Ticks,
+    chapter: Option<&str>,
+    thumbnail: Option<TextureHandle>,
+) {
     let painter = ui.ctx().layer_painter(egui::LayerId::new(
         egui::Order::Tooltip,
         egui::Id::unique("seek preview"),
     ));
-    let label = ClockTime::new(at, Timebase::MICROS, ClockPrecision::Seconds).to_string();
+    let time = ClockTime::new(at, Timebase::MICROS, ClockPrecision::Seconds);
+    let label = match chapter {
+        Some(title) => format!("{time} · {}", truncate(title, 40)),
+        None => time.to_string(),
+    };
     let galley = painter.layout_no_wrap(label, egui::FontId::proportional(13.0), theme::TEXT);
     let thumb_size = thumbnail
         .as_ref()
@@ -135,4 +156,11 @@ pub fn texture(ctx: &egui::Context, name: &str, image: &Arc<RgbaImage>) -> Textu
         &image.pixels,
     );
     ctx.load_texture(name, color, egui::TextureOptions::LINEAR)
+}
+
+fn truncate(text: &str, max_chars: usize) -> String {
+    match text.char_indices().nth(max_chars) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.to_owned(),
+    }
 }

@@ -1,133 +1,23 @@
+#[cfg(windows)]
+mod shared;
+
 use std::mem;
 
 use cut::{Ticks, Timebase};
 
 use crate::ffi::{
-    CodecContext, FilterGraph, FilterMedia, Frame, HwDevice, MasteringLuminance, Packet, Received,
-    StreamParams, pixel_format_name,
+    CodecContext, FilterGraph, FilterMedia, Frame, HwDevice, Packet, Received, StreamParams,
+    pixel_format_name,
 };
+use crate::gpu::GpuPicture;
+use crate::replay::ReplayBuffer;
+use crate::video_frame::{HardwareDecoding, PlaneLayout, VideoFrame, VideoOptions};
 use crate::{ColorInfo, ColorRange, Matrix, MediaError, Primaries};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HardwareDecoding {
-    Auto,
-    Off,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct VideoOptions {
-    pub hardware: HardwareDecoding,
-    /// Whether frames may come out with more than 8 bits per sample; otherwise they're reduced.
-    pub high_bit_depth: bool,
-}
-
-/// How the three planes of a [`VideoFrame`] are laid out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct PlaneLayout {
-    /// Significant bits per sample: 8 (one byte) or 10/12/16 (two little-endian bytes).
-    pub bits: u8,
-    /// Chroma planes are this many powers of two narrower and shorter than luma.
-    pub chroma_shift_x: u8,
-    pub chroma_shift_y: u8,
-    /// U and V share plane 1, interleaved (NV12, P010), as hardware decoders produce them.
-    pub interleaved_chroma: bool,
-}
-
-impl PlaneLayout {
-    pub fn bytes_per_sample(self) -> usize {
-        if self.bits > 8 { 2 } else { 1 }
-    }
-
-    fn from_format_name(name: &str) -> Option<PlaneLayout> {
-        let interleaved = |bits| PlaneLayout {
-            bits,
-            chroma_shift_x: 1,
-            chroma_shift_y: 1,
-            interleaved_chroma: true,
-        };
-        match name {
-            "nv12" => return Some(interleaved(8)),
-            // P010 keeps its 10 bits at the top of each 16-bit sample, so it reads as 16-bit.
-            "p010le" => return Some(interleaved(16)),
-            _ => {}
-        }
-        let (bits, rest) = match name.strip_suffix("le") {
-            Some(base) => {
-                let digits_at = base.rfind('p')? + 1;
-                (base[digits_at..].parse().ok()?, &base[..digits_at])
-            }
-            None => (8, name),
-        };
-        let (chroma_shift_x, chroma_shift_y) = match rest {
-            "yuv420p" => (1, 1),
-            "yuv422p" => (1, 0),
-            "yuv444p" => (0, 0),
-            _ => return None,
-        };
-        Some(PlaneLayout {
-            bits,
-            chroma_shift_x,
-            chroma_shift_y,
-            interleaved_chroma: false,
-        })
-    }
-}
 
 // NV12 and P010 are what hardware decoders download as; listing them avoids a CPU conversion.
 const EIGHT_BIT_FORMATS: &str = "nv12|yuv420p|yuv422p|yuv444p";
 const HIGH_BIT_FORMATS: &str = "nv12|p010le|yuv420p|yuv422p|yuv444p|yuv420p10le|yuv422p10le|\
 yuv444p10le|yuv420p12le|yuv422p12le|yuv444p12le";
-
-/// A decoded, display-ready frame in planar YUV.
-pub struct VideoFrame {
-    frame: Frame,
-    /// Presentation time in microseconds.
-    pub pts: Ticks,
-    /// Presentation time in the stream's own timebase.
-    pub stream_pts: Ticks,
-    /// In microseconds; zero when unknown.
-    pub duration: Ticks,
-    pub layout: PlaneLayout,
-    pub color: ColorInfo,
-    pub luminance: MasteringLuminance,
-}
-
-impl VideoFrame {
-    pub fn width(&self) -> u32 {
-        self.frame.width()
-    }
-
-    pub fn height(&self) -> u32 {
-        self.frame.height()
-    }
-
-    /// Plane `index` (0 = Y, 1 = U or interleaved UV, 2 = V) as `(bytes, stride)`.
-    pub fn plane(&self, index: usize) -> Option<(&[u8], usize)> {
-        if index > 2 {
-            return None;
-        }
-        self.frame.plane(index)
-    }
-
-    pub(crate) fn frame(&self) -> &Frame {
-        &self.frame
-    }
-
-    pub(crate) fn frame_mut(&mut self) -> &mut Frame {
-        &mut self.frame
-    }
-
-    /// Display width over height, including non-square pixels.
-    pub fn display_aspect(&self) -> f32 {
-        let (num, den) = self.frame.sample_aspect_ratio();
-        let pixel_aspect = if num > 0 && den > 0 {
-            num as f32 / den as f32
-        } else {
-            1.0
-        };
-        self.width() as f32 * pixel_aspect / self.height().max(1) as f32
-    }
-}
 
 struct ActiveFilter {
     graph: FilterGraph,
@@ -152,16 +42,27 @@ pub struct VideoDecoder {
     stream_color: ColorInfo,
     stream_interlaced: bool,
     filter: Option<ActiveFilter>,
+    /// A deinterlacing graph replaced mid-stream, still giving out the frame it held back.
+    retiring: Option<ActiveFilter>,
     filter_drained: bool,
     decoded: Frame,
     downloaded: Frame,
     filtered: Frame,
     skipped: u64,
+    replay: ReplayBuffer,
+    /// The last frame given out, in stream ticks.
+    last_output: Option<Ticks>,
+    /// After a fallback replays the GOP: frames up to here were given out already.
+    skip_through: Option<Ticks>,
+    /// The end of the stream was sent, so a decoder taking over must be drained too.
+    end_sent: bool,
+    #[cfg(windows)]
+    sharing: shared::Sharing,
 }
 
 impl VideoDecoder {
     pub fn new(params: StreamParams, options: VideoOptions) -> Result<VideoDecoder, MediaError> {
-        let codec = open_codec(&params, options.hardware)?;
+        let codec = open_codec(&params, options)?;
         let view = params.view();
         Ok(VideoDecoder {
             stream_color: view.color(),
@@ -170,11 +71,18 @@ impl VideoDecoder {
             codec,
             options,
             filter: None,
+            retiring: None,
             filter_drained: false,
             decoded: Frame::new()?,
             downloaded: Frame::new()?,
             filtered: Frame::new()?,
             skipped: 0,
+            replay: ReplayBuffer::default(),
+            #[cfg(windows)]
+            sharing: shared::Sharing::default(),
+            last_output: None,
+            end_sent: false,
+            skip_through: None,
         })
     }
 
@@ -190,10 +98,25 @@ impl VideoDecoder {
     /// Feeds a packet, or `None` at the end of the stream. Returns `false` when frames must be
     /// received first; send the same packet again afterwards. Bad packets are skipped.
     pub fn send(&mut self, packet: Option<&Packet>) -> Result<bool, MediaError> {
+        let hardware = self.codec.is_hardware();
         match self.codec.send_packet(packet) {
-            Ok(accepted) => Ok(accepted),
-            Err(_) if self.codec.is_hardware() => {
-                self.fall_back_to_software()?;
+            Ok(accepted) => {
+                if accepted && packet.is_none() {
+                    self.end_sent = true;
+                }
+                if accepted
+                    && hardware
+                    && let Some(packet) = packet
+                {
+                    self.replay.record(packet)?;
+                }
+                Ok(accepted)
+            }
+            Err(_) if hardware => {
+                if let Some(packet) = packet {
+                    self.replay.record(packet)?;
+                }
+                self.fall_back_to_software(packet.is_none())?;
                 Ok(true)
             }
             Err(_) => {
@@ -206,17 +129,36 @@ impl VideoDecoder {
     /// The next decoded frame, or `None` when more input is needed or the stream has ended.
     pub fn receive(&mut self) -> Result<Option<VideoFrame>, MediaError> {
         loop {
+            if let Some(retiring) = &mut self.retiring {
+                if retiring.graph.pull(&mut self.filtered)? == Received::Output {
+                    let timebase = retiring.output_timebase;
+                    if let Some(frame) = self.finish_frame(timebase)? {
+                        return Ok(Some(frame));
+                    }
+                    continue;
+                }
+                self.retiring = None;
+            }
             if let Some(filter) = &mut self.filter
                 && filter.graph.pull(&mut self.filtered)? == Received::Output
             {
                 let timebase = filter.output_timebase;
-                return self.finish_frame(timebase).map(Some);
+                if let Some(frame) = self.finish_frame(timebase)? {
+                    return Ok(Some(frame));
+                }
+                continue;
             }
             match self.codec.receive_frame(&mut self.decoded) {
                 Ok(Received::Output) => {
+                    match self.share_decoded() {
+                        Ok(Some(Some(frame))) => return Ok(Some(frame)),
+                        Ok(Some(None)) => continue,
+                        Ok(None) => {}
+                        Err(error) => return Err(error),
+                    }
                     if self.filter_decoded().is_err() {
                         if self.codec.is_hardware() {
-                            self.fall_back_to_software()?;
+                            self.fall_back_to_software(self.end_sent)?;
                         } else {
                             self.skipped += 1;
                             self.filter = None;
@@ -233,7 +175,7 @@ impl VideoDecoder {
                         filter.graph.push(None)?;
                     }
                 }
-                Err(_) if self.codec.is_hardware() => self.fall_back_to_software()?,
+                Err(_) if self.codec.is_hardware() => self.fall_back_to_software(self.end_sent)?,
                 Err(_) => self.skipped += 1,
             }
         }
@@ -243,15 +185,67 @@ impl VideoDecoder {
     pub fn flush(&mut self) {
         self.codec.flush();
         self.filter = None;
+        self.retiring = None;
         self.filter_drained = false;
+        self.replay.clear();
+        self.last_output = None;
+        self.skip_through = None;
+        self.end_sent = false;
     }
 
-    fn fall_back_to_software(&mut self) -> Result<(), MediaError> {
-        self.codec = open_codec(&self.params, HardwareDecoding::Off)?;
+    /// Switches to software decoding and feeds it the current GOP again from its keyframe, so
+    /// the picture carries on instead of breaking up until the next keyframe.
+    fn fall_back_to_software(&mut self, draining: bool) -> Result<(), MediaError> {
+        let software = VideoOptions {
+            hardware: HardwareDecoding::Off,
+            ..self.options
+        };
+        self.codec = open_codec(&self.params, software)?;
+        #[cfg(windows)]
+        {
+            // Software pictures never use the shared textures; let them go.
+            self.sharing = shared::Sharing::default();
+        }
         self.options.hardware = HardwareDecoding::Off;
         self.filter = None;
+        self.retiring = None;
         self.filter_drained = false;
+        self.skip_through = self.last_output;
+        for packet in self.replay.take() {
+            self.feed_software(Some(&packet));
+        }
+        if draining {
+            self.feed_software(None);
+        }
         Ok(())
+    }
+
+    /// Sends a packet, taking frames out into the filter whenever the decoder is full.
+    fn feed_software(&mut self, packet: Option<&Packet>) {
+        loop {
+            match self.codec.send_packet(packet) {
+                Ok(true) => return,
+                Ok(false) => match self.codec.receive_frame(&mut self.decoded) {
+                    Ok(Received::Output) => {
+                        // Pictures already shown are dropped here rather than piling up in
+                        // the filter: a whole GOP of them can be gigabytes at 4K.
+                        let shown = self.decoded.filtered_pts().is_some_and(|pts| {
+                            self.skip_through.is_some_and(|through| pts <= through)
+                        });
+                        if !shown && self.filter_decoded().is_err() {
+                            self.skipped += 1;
+                            self.filter = None;
+                        }
+                    }
+                    Ok(Received::Again | Received::Eof) => return,
+                    Err(_) => self.skipped += 1,
+                },
+                Err(_) => {
+                    self.skipped += 1;
+                    return;
+                }
+            }
+        }
     }
 
     fn filter_decoded(&mut self) -> Result<(), MediaError> {
@@ -265,9 +259,17 @@ impl VideoDecoder {
             width: source.width(),
             height: source.height(),
             format: source.format(),
-            deinterlace: self.stream_interlaced || source.is_interlaced(),
+            deinterlace: self.options.deinterlace
+                && (self.stream_interlaced || source.is_interlaced()),
         };
         if self.filter.as_ref().is_none_or(|f| f.key != key) {
+            // The deinterlacer holds a frame back; drain it rather than drop it.
+            if let Some(mut old) = self.filter.take()
+                && old.key.deinterlace
+                && old.graph.push(None).is_ok()
+            {
+                self.retiring = Some(old);
+            }
             self.filter = Some(build_filter(
                 key,
                 source,
@@ -281,32 +283,65 @@ impl VideoDecoder {
         filter.graph.push(Some(source))
     }
 
-    fn finish_frame(&mut self, timebase: Timebase) -> Result<VideoFrame, MediaError> {
+    /// The filtered frame, or `None` if a fallback's replay already gave it out.
+    fn finish_frame(&mut self, timebase: Timebase) -> Result<Option<VideoFrame>, MediaError> {
         let frame = mem::replace(&mut self.filtered, Frame::new()?);
         let format = pixel_format_name(frame.format()).unwrap_or_default();
         let layout = PlaneLayout::from_format_name(&format)
             .ok_or_else(|| MediaError::Unsupported(format!("filtered pixel format {format}")))?;
+        Ok(self.complete(frame, timebase, layout, None))
+    }
+
+    /// Stamps a finished frame, or `None` if a fallback's replay already gave it out.
+    fn complete(
+        &mut self,
+        frame: Frame,
+        timebase: Timebase,
+        layout: PlaneLayout,
+        gpu: Option<GpuPicture>,
+    ) -> Option<VideoFrame> {
         let pts = frame.filtered_pts().unwrap_or(Ticks::ZERO);
+        let stream_pts = pts.rescale(timebase, self.params.timebase());
+        if self.skip_through.is_some_and(|shown| stream_pts <= shown) {
+            return None;
+        }
+        self.skip_through = None;
+        self.last_output = Some(stream_pts);
         let color = merge_color(frame.color(), self.stream_color).resolved(frame.height());
-        Ok(VideoFrame {
+        Some(VideoFrame {
             pts: pts.rescale(timebase, Timebase::MICROS),
-            stream_pts: pts.rescale(timebase, self.params.timebase()),
+            stream_pts,
             duration: frame.duration().rescale(timebase, Timebase::MICROS),
             layout,
             color,
             luminance: frame.mastering_luminance(),
             frame,
+            gpu,
         })
     }
 }
 
-fn open_codec(
-    params: &StreamParams,
-    hardware: HardwareDecoding,
-) -> Result<CodecContext, MediaError> {
-    if hardware == HardwareDecoding::Auto {
+/// Pictures stay on the GPU only on Windows.
+#[cfg(not(windows))]
+impl VideoDecoder {
+    fn share_decoded(&mut self) -> Result<Option<Option<VideoFrame>>, MediaError> {
+        Ok(None)
+    }
+}
+
+fn open_codec(params: &StreamParams, options: VideoOptions) -> Result<CodecContext, MediaError> {
+    if options.hardware == HardwareDecoding::Auto {
+        // Pictures kept on the GPU must be decoded on the renderer's adapter.
+        #[cfg(windows)]
+        let adapter = options
+            .gpu
+            .and_then(|gpu| crate::ffi::adapter_index(gpu.adapter_luid));
+        #[cfg(not(windows))]
+        let adapter = None;
         for &device in HwDevice::preferred() {
-            if let Ok(codec) = CodecContext::decoder(params, Some(device))
+            // The index is DXGI's; DXVA2 numbers its adapters differently.
+            let adapter = adapter.filter(|_| device == HwDevice::D3d11va);
+            if let Ok(codec) = CodecContext::decoder_on(params, Some(device), adapter)
                 && codec.is_hardware()
             {
                 return Ok(codec);
@@ -379,28 +414,5 @@ fn merge_color(frame: ColorInfo, stream: ColorInfo) -> ColorInfo {
         } else {
             frame.range
         },
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::PlaneLayout;
-
-    #[test]
-    fn plane_layout_reads_bit_depth_and_subsampling_from_format_names() {
-        let layout = |name| {
-            PlaneLayout::from_format_name(name)
-                .map(|l| (l.bits, l.chroma_shift_x, l.chroma_shift_y))
-        };
-        assert_eq!(layout("yuv420p"), Some((8, 1, 1)));
-        assert_eq!(layout("yuv422p10le"), Some((10, 1, 0)));
-        assert_eq!(layout("yuv444p12le"), Some((12, 0, 0)));
-        assert_eq!(layout("nv12"), Some((8, 1, 1)));
-        assert!(
-            PlaneLayout::from_format_name("p010le")
-                .unwrap()
-                .interleaved_chroma
-        );
-        assert_eq!(layout("rgb24"), None);
     }
 }

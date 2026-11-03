@@ -1,4 +1,5 @@
-// Converts planar Y'CbCr to display R'G'B', tone mapping HDR to SDR.
+// Converts planar Y'CbCr to display R'G'B': tone mapped to SDR, or on an HDR display as scRGB
+// with highlights above SDR white.
 
 struct Params {
     // Y'CbCr -> R'G'B' matrix rows.
@@ -13,6 +14,8 @@ struct Params {
     // x: 1 if colors need linear-light processing (HDR or wide gamut); y: 1 if U and V are
     // interleaved in plane_u (NV12, P010).
     flags: vec4<f32>,
+    // x: 1 for scRGB on an HDR display; y: SDR white and z: display peak, in scRGB units.
+    output: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -76,6 +79,46 @@ fn tone_map(rgb: vec3<f32>, peak: f32) -> vec3<f32> {
     return rgb * (mapped / l);
 }
 
+const SCRGB_UNIT_NITS: f32 = 80.0;
+
+// Leaves colors alone up to a knee below `peak`, then eases the brightest channel towards
+// `peak`, scaling the others with it to keep the hue. Going by the brightest channel rather
+// than luminance also bounds saturated colors, whose luminance is low.
+fn roll_off(rgb: vec3<f32>, peak: f32) -> vec3<f32> {
+    let m = max(max(rgb.r, rgb.g), rgb.b);
+    let knee = 0.75 * peak;
+    if (m <= knee) {
+        return rgb;
+    }
+    let mapped = knee + (peak - knee) * (1.0 - exp(-(m - knee) / (peak - knee)));
+    return rgb * (mapped / m);
+}
+
+// scRGB for an HDR display: HDR keeps its absolute brightness up to the display's peak, SDR
+// is placed at the system's SDR white. Colors outside BT.709 stay as negative components.
+fn to_scrgb(encoded: vec3<f32>) -> vec3<f32> {
+    let transfer = params.misc.y;
+    var linear: vec3<f32>;
+    if (transfer > 1.5) {
+        linear = hlg_to_nits(encoded) / SCRGB_UNIT_NITS;
+    } else if (transfer > 0.5) {
+        linear = pq_to_nits(encoded) / SCRGB_UNIT_NITS;
+    } else {
+        linear = srgb_to_linear(encoded) * params.output.y;
+    }
+    if (params.flags.x > 0.5) {
+        linear = vec3<f32>(
+            dot(params.gamut[0].xyz, linear),
+            dot(params.gamut[1].xyz, linear),
+            dot(params.gamut[2].xyz, linear),
+        );
+    }
+    if (transfer > 0.5) {
+        linear = roll_off(linear, params.output.z);
+    }
+    return linear;
+}
+
 fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     let low = c / 12.92;
     let high = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
@@ -99,6 +142,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         vec3<f32>(0.0),
         vec3<f32>(1.0),
     );
+
+    if (params.output.x > 0.5) {
+        return vec4<f32>(to_scrgb(rgb), 1.0);
+    }
 
     if (params.flags.x > 0.5) {
         let transfer = params.misc.y;

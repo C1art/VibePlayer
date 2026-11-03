@@ -59,6 +59,8 @@ impl SmartHead {
             VideoOptions {
                 hardware: HardwareDecoding::Off,
                 high_bit_depth: true,
+                deinterlace: false,
+                gpu: None,
             },
         )?;
         let view = params.view();
@@ -175,7 +177,7 @@ impl SmartHead {
             packet.set_timestamps(pts, pts.map(|pts| pts - delay));
             if self.format != NalFormat::AnnexB {
                 let units = nal::split_annex_b(packet.data());
-                let framed = nal::frame(units, self.format);
+                let framed = nal::frame(units, self.format).ok_or_else(too_long)?;
                 packet.replace_data(&framed)?;
             }
             restamp(&mut packet);
@@ -185,7 +187,8 @@ impl SmartHead {
             if index == 0 && !self.parameter_sets.is_empty() {
                 // The head switched the decoder to the encoder's parameter sets; switch back.
                 let mut data =
-                    nal::frame(self.parameter_sets.iter().map(Vec::as_slice), self.format);
+                    nal::frame(self.parameter_sets.iter().map(Vec::as_slice), self.format)
+                        .ok_or_else(too_long)?;
                 data.extend_from_slice(packet.data());
                 packet.replace_data(&data)?;
             }
@@ -194,6 +197,10 @@ impl SmartHead {
         }
         Ok(frames)
     }
+}
+
+fn too_long() -> ExportError {
+    ExportError::SmartCut("a re-encoded frame is too large for this file's NAL length size".into())
 }
 
 fn collect(encoder: &mut VideoEncoder, into: &mut Vec<Packet>) -> Result<(), ExportError> {

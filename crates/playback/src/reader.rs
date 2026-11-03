@@ -277,6 +277,7 @@ impl Reader {
         }
         let flush = || PacketMessage::Flush {
             generation,
+            target,
             exact_target: exact.then_some(target),
         };
         for sender in [&self.video.sender, &self.audio.sender]
