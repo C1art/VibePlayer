@@ -462,9 +462,9 @@ impl VibePlayerApp {
     /// Draws the video, subtitles and controls. Returns whether the pointer is over controls.
     fn show_player(&mut self, ui: &mut egui::Ui, area: Rect, actions: &mut Vec<Action>) -> bool {
         let ctx = ui.ctx().clone();
-        let pointer_near_controls = ctx
-            .pointer_hover_pos()
-            .is_some_and(|p| p.y > area.bottom() - controls::HEIGHT);
+        let pointer_near_controls = ctx.pointer_hover_pos().is_some_and(|p| {
+            p.y > area.bottom() - controls::HEIGHT || p.y < area.top() + controls::TOP_HEIGHT
+        });
         let visible = self.controls_visible(&ctx, pointer_near_controls);
         let Some(session) = &mut self.session else {
             return false;
@@ -557,6 +557,7 @@ impl VibePlayerApp {
             let mut preview = |at: Ticks| session.thumbnail(&ctx, at);
             over = controls::show(ui, area, &state, &mut preview, actions);
             paint_title(ui, area, &opened.info.file_name());
+            over |= controls::top_bar(ui, area, actions);
         }
         if self.info_open {
             let stats = PlaybackStats {
@@ -656,7 +657,9 @@ fn paint_title(ui: &egui::Ui, area: Rect, name: &str) {
         Color32::from_black_alpha(170),
         Color32::TRANSPARENT,
     );
-    ui.painter().text(
+    // Clipped short of the file buttons on the right.
+    let room = Rect::from_min_max(band.min, egui::pos2(band.right() - 190.0, band.bottom()));
+    ui.painter_at(room).text(
         area.left_top() + egui::vec2(22.0, 20.0),
         egui::Align2::LEFT_TOP,
         name,
