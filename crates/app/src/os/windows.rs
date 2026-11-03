@@ -421,21 +421,71 @@ pub(super) mod single_instance {
     }
 }
 
-pub fn is_on_screen(x: i32, y: i32) -> bool {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-        SM_YVIRTUALSCREEN,
+pub fn place_window(window: isize, placement: library::WindowPlacement) -> bool {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONULL, MonitorFromRect};
+    use windows::Win32::UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos};
+    let (Ok(width), Ok(height)) = (
+        i32::try_from(placement.width),
+        i32::try_from(placement.height),
+    ) else {
+        return false;
     };
-    // SAFETY: GetSystemMetrics only reads system values.
-    let (left, top, width, height) = unsafe {
-        (
-            GetSystemMetrics(SM_XVIRTUALSCREEN),
-            GetSystemMetrics(SM_YVIRTUALSCREEN),
-            GetSystemMetrics(SM_CXVIRTUALSCREEN),
-            GetSystemMetrics(SM_CYVIRTUALSCREEN),
-        )
+    let rect = RECT {
+        left: placement.x,
+        top: placement.y,
+        right: placement.x.saturating_add(width),
+        bottom: placement.y.saturating_add(height),
     };
-    // A point on the title bar, a little in from the corner.
-    let (title_x, title_y) = (x.saturating_add(60), y.saturating_add(12));
-    (left..left + width).contains(&title_x) && (top..top + height).contains(&title_y)
+    // SAFETY: MonitorFromRect only reads the rectangle; `window` is our own top-level window,
+    // and SetWindowPos neither shows nor activates it.
+    unsafe {
+        if MonitorFromRect(&rect, MONITOR_DEFAULTTONULL).is_invalid() {
+            return false;
+        }
+        let place = || {
+            SetWindowPos(
+                HWND(window as *mut core::ffi::c_void),
+                None,
+                rect.left,
+                rect.top,
+                width,
+                height,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+        // Arriving on a monitor with another scale factor makes the window keep its size in
+        // logical units; placing it again there sets the saved size in pixels.
+        place().is_ok() && place().is_ok()
+    }
+}
+
+pub fn window_placement(
+    window: isize,
+    previous: Option<library::WindowPlacement>,
+) -> Option<library::WindowPlacement> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsIconic, IsZoomed};
+    let window = HWND(window as *mut core::ffi::c_void);
+    // SAFETY: plain queries of our own window.
+    unsafe {
+        if IsIconic(window).as_bool() {
+            return previous;
+        }
+        if IsZoomed(window).as_bool() {
+            return previous.map(|placement| library::WindowPlacement {
+                maximized: true,
+                ..placement
+            });
+        }
+        let mut rect = RECT::default();
+        GetWindowRect(window, &mut rect).ok()?;
+        Some(library::WindowPlacement {
+            x: rect.left,
+            y: rect.top,
+            width: u32::try_from(rect.right - rect.left).ok()?,
+            height: u32::try_from(rect.bottom - rect.top).ok()?,
+            maximized: false,
+        })
+    }
 }

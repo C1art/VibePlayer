@@ -92,13 +92,21 @@ impl Taskbar {
         if !self.buttons_added && self.last_try.is_none_or(|last| last.elapsed() >= RETRY) {
             self.last_try = Some(Instant::now());
             let buttons = self.buttons(state.playing);
+            // Buttons can only be added once per taskbar button; if an earlier attempt got
+            // through after all, updating them works instead.
             // SAFETY: `window` is our live top-level window; the buttons are fully initialized.
-            self.buttons_added = unsafe { list.ThumbBarAddButtons(window, &buttons) }.is_ok();
+            self.buttons_added = unsafe {
+                list.ThumbBarAddButtons(window, &buttons).is_ok()
+                    || list.ThumbBarUpdateButtons(window, &buttons).is_ok()
+            };
             if self.buttons_added {
                 self.shown = Some(TaskbarState {
                     playing: state.playing,
                     progress: None,
                 });
+            } else {
+                // The taskbar isn't ready yet; come back even if nothing else repaints.
+                self.shared.repaint.request_repaint_after(RETRY);
             }
         }
         let shown = self.shown.unwrap_or(TaskbarState {

@@ -64,7 +64,9 @@ impl VibePlayerApp {
         instance_requests: Option<Receiver<PathBuf>>,
     ) -> VibePlayerApp {
         theme::apply(&creation.egui_ctx);
-        let window = WindowTracker::new(settings.window);
+        let native_window = crate::os::NativeWindow::of(creation);
+        crate::window_state::place(native_window, settings.window, &creation.egui_ctx);
+        let window = WindowTracker::new(native_window, settings.window);
         let history = store.as_ref().map(Store::load_history).unwrap_or_default();
         let high_bit_depth = creation.wgpu_render_state.as_ref().map(video_view::install);
         diagnostics::log_startup(creation, high_bit_depth);
@@ -362,7 +364,8 @@ impl eframe::App for VibePlayerApp {
             );
         }
         self.updates.tick(&self.settings);
-        match self.updates.poll(&mut self.settings) {
+        let exporting = self.editor.as_ref().is_some_and(Editor::is_exporting);
+        match self.updates.poll(&mut self.settings, exporting) {
             crate::updates::UpdateOutcome::SettingsChanged => settings_changed = true,
             crate::updates::UpdateOutcome::InstallerLaunched => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -390,6 +393,12 @@ impl eframe::App for VibePlayerApp {
         }
         self.handle_scrub_throttle(&ctx, &mut actions, now);
         for action in actions {
+            // Any seek ends a selection preview (starting one sets it again).
+            if moves_playhead(&action)
+                && let Some(editor) = &mut self.editor
+            {
+                editor.previewing = false;
+            }
             self.apply(&ctx, action, now);
         }
         self.update_media_controls();
@@ -407,6 +416,8 @@ impl eframe::App for VibePlayerApp {
             saver.save_history(&self.history);
             saver.flush();
         }
+        log::info("closed");
+        log::flush(Duration::from_secs(1));
     }
 }
 
@@ -634,6 +645,8 @@ fn moves_playhead(action: &Action) -> bool {
         Action::SeekTo { .. }
             | Action::SeekBy { .. }
             | Action::SeekToTenth(_)
+            | Action::NextChapter
+            | Action::PreviousChapter
             | Action::StepBack
             | Action::StepForward
             | Action::Editor(

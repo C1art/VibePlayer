@@ -16,6 +16,8 @@ pub struct Updates {
     last_automatic: Option<Instant>,
     offer: Option<Release>,
     download: Option<Download>,
+    /// A downloaded installer waiting for an export to finish, since installing closes the app.
+    installer: Option<std::path::PathBuf>,
     /// Feedback for checks the user started from Settings.
     pub status: Option<String>,
 }
@@ -36,11 +38,12 @@ impl Updates {
         }
     }
 
-    /// Checks again once a day for people who leave the player open.
+    /// Checks again once a day for people who leave the player open, and as soon as automatic
+    /// checks are turned on if they were off at launch.
     pub fn tick(&mut self, settings: &Settings) {
         let due = self
             .last_automatic
-            .is_some_and(|last| last.elapsed() >= update::RECHECK_INTERVAL);
+            .is_none_or(|last| last.elapsed() >= update::RECHECK_INTERVAL);
         if due && self.offer.is_none() && self.download.is_none() {
             self.start_automatic(settings);
         }
@@ -62,7 +65,8 @@ impl Updates {
         self.check.is_some() || self.download.is_some()
     }
 
-    pub fn poll(&mut self, settings: &mut Settings) -> UpdateOutcome {
+    /// `exporting` holds back the installer, which closes the app, until the export is done.
+    pub fn poll(&mut self, settings: &mut Settings, exporting: bool) -> UpdateOutcome {
         let mut outcome = UpdateOutcome::None;
         if let Some((check, manual)) = &self.check
             && let Some(result) = check.poll()
@@ -101,7 +105,22 @@ impl Updates {
             && let Some(result) = download.poll()
         {
             self.download = None;
-            match result.and_then(launch_installer) {
+            match result {
+                Ok(installer) => self.installer = Some(installer),
+                Err(error) => {
+                    log::error(format!("update failed: {error}"));
+                    self.status = Some(describe(&error));
+                }
+            }
+        }
+        if exporting {
+            if self.installer.is_some() {
+                self.status = Some("The update installs when the export finishes.".into());
+            }
+            return outcome;
+        }
+        if let Some(installer) = self.installer.take() {
+            match launch_installer(installer) {
                 Ok(()) => {
                     log::info("update downloaded; starting the installer");
                     return UpdateOutcome::InstallerLaunched;

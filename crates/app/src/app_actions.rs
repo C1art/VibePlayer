@@ -102,9 +102,14 @@ impl VibePlayerApp {
                     }
                     None if marks.is_empty() => self.osd.show("No chapters"),
                     None if action == Action::NextChapter => self.osd.show("Last chapter"),
+                    // Before the first chapter, or in it: back to the start of the file.
                     None => {
                         player.seek(Ticks::ZERO, SeekMode::Exact);
-                        self.osd.show(chapters::label(marks, 0));
+                        self.osd.show(if marks[0].start <= position {
+                            chapters::label(marks, 0)
+                        } else {
+                            "Start".into()
+                        });
                     }
                 }
             }

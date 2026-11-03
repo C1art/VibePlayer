@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossbeam::channel::{self, Sender};
 
@@ -16,9 +16,15 @@ const PREVIOUS_FILE_NAME: &str = "vibeplayer.previous.log";
 /// Past this size at startup, the log is moved aside and a new one begun.
 const MAX_BYTES: u64 = 1_000_000;
 
+enum Message {
+    Line(String),
+    /// Answered once every line sent before it is written.
+    Flush(Sender<()>),
+}
+
 struct Log {
     path: PathBuf,
-    lines: Sender<String>,
+    lines: Sender<Message>,
 }
 
 static LOG: OnceLock<Log> = OnceLock::new();
@@ -36,11 +42,18 @@ pub fn start(dir: &Path) {
     let Ok(mut file) = open(&path) else {
         return;
     };
-    let (lines, receiver) = channel::unbounded::<String>();
+    let (lines, receiver) = channel::unbounded::<Message>();
     let spawned = thread::Builder::new().name("log".into()).spawn(move || {
-        for line in receiver {
-            let _ = file.write_all(line.as_bytes());
-            let _ = file.flush();
+        for message in receiver {
+            match message {
+                Message::Line(line) => {
+                    let _ = file.write_all(line.as_bytes());
+                    let _ = file.flush();
+                }
+                Message::Flush(done) => {
+                    let _ = done.send(());
+                }
+            }
         }
     });
     if spawned.is_ok() {
@@ -65,8 +78,20 @@ pub fn error(message: impl Display) {
     send("ERROR", message);
 }
 
-/// Appends at once, for a panic: the process may end before the worker gets to it.
+/// Waits up to `timeout` for the lines logged so far to reach the file, e.g. before exiting.
+pub fn flush(timeout: Duration) {
+    if let Some(log) = LOG.get() {
+        let (done, finished) = channel::bounded(1);
+        if log.lines.send(Message::Flush(done)).is_ok() {
+            let _ = finished.recv_timeout(timeout);
+        }
+    }
+}
+
+/// Appends at once, for a panic: the process may end before the worker gets to it. Lines
+/// already queued go first, if the worker can write them promptly.
 pub fn write_now(message: impl Display) {
+    flush(Duration::from_millis(500));
     if let Some(log) = LOG.get()
         && let Ok(mut file) = open(&log.path)
     {
@@ -76,7 +101,7 @@ pub fn write_now(message: impl Display) {
 
 fn send(level: &str, message: impl Display) {
     if let Some(log) = LOG.get() {
-        let _ = log.lines.send(line(level, message));
+        let _ = log.lines.send(Message::Line(line(level, message)));
     }
 }
 

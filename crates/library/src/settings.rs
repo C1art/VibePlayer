@@ -24,8 +24,8 @@ pub struct Settings {
     pub window: Option<WindowPlacement>,
 }
 
-/// The window's size and position when not maximized, in logical points, and whether it was
-/// maximized.
+/// The window's size and position when not maximized, and whether it was maximized. On
+/// Windows the outer rectangle in pixels; elsewhere egui's logical points.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowPlacement {
     pub x: i32,

@@ -149,18 +149,49 @@ impl MediaControls {
     }
 }
 
-/// Whether a window whose top-left corner is at `x`, `y` would have its title bar on a
-/// screen. Positions are logical points; screens are compared in pixels, which is at least as
-/// generous.
-pub fn is_on_screen(x: i32, y: i32) -> bool {
+/// The app's top-level window, as the operating system knows it (a Windows `HWND`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NativeWindow(#[cfg_attr(not(windows), allow(dead_code))] isize);
+
+impl NativeWindow {
+    /// The window eframe created, on Windows.
+    pub fn of(creation: &eframe::CreationContext<'_>) -> Option<NativeWindow> {
+        use eframe::wgpu::rwh::{HasWindowHandle, RawWindowHandle};
+        match creation.window_handle().ok()?.as_raw() {
+            RawWindowHandle::Win32(handle) => Some(NativeWindow(handle.hwnd.get())),
+            _ => None,
+        }
+    }
+}
+
+/// Moves and sizes `window` to `placement` (pixels, outer rectangle) if that rectangle is on a
+/// monitor. Returns whether it did.
+pub fn place_window(window: NativeWindow, placement: library::WindowPlacement) -> bool {
     #[cfg(windows)]
     {
-        windows::is_on_screen(x, y)
+        windows::place_window(window.0, placement)
     }
     #[cfg(not(windows))]
     {
-        let _ = (x, y);
-        true
+        let _ = (window, placement);
+        false
+    }
+}
+
+/// `window`'s normal rectangle in pixels and whether it's maximized; while maximized, the
+/// rectangle stays `previous`'s.
+pub fn window_placement(
+    window: NativeWindow,
+    previous: Option<library::WindowPlacement>,
+) -> Option<library::WindowPlacement> {
+    #[cfg(windows)]
+    {
+        windows::window_placement(window.0, previous)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (window, previous);
+        None
     }
 }
 
