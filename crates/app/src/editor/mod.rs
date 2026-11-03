@@ -9,13 +9,13 @@ use std::path::{Path, PathBuf};
 
 use cut::{CutPlan, StreamIndex, Ticks, Timebase, TrimRequest};
 use eframe::egui;
-use export::{AudioChanges, ExportJob, ExportRequest, ExportResult};
+use export::{AudioChanges, AudioTracks, ExportJob, ExportRequest, ExportResult};
 use library::{CutSession, EditorPreferences, log};
 use media::{Decibels, Equalizer, MediaInfo, StreamKind};
 
 use crate::os::PendingDialog;
 
-pub use panel::{EditorAction, HEIGHT, show as show_panel};
+pub use panel::{EditorAction, height, show as show_panel};
 
 use keyframes::{KeyframeFinder, KeyframeIndex};
 use waveform::Waveform;
@@ -32,6 +32,7 @@ pub struct Editor {
     pub end: Ticks,
     pub gain: Decibels,
     pub equalizer: Equalizer,
+    pub audio_tracks: AudioTracks,
     keyframes: KeyframeFinder,
     index: KeyframeIndex,
     waveform: Option<Waveform>,
@@ -75,6 +76,7 @@ impl Editor {
             end: duration,
             gain: Decibels(0),
             equalizer: Equalizer::default(),
+            audio_tracks: AudioTracks::Keep,
             keyframes: KeyframeFinder::new(info.path.clone(), primary.index, repaint.clone()),
             index: KeyframeIndex::new(info.path.clone(), primary.index, repaint.clone()),
             waveform: None,
@@ -102,6 +104,9 @@ impl Editor {
                 mid: Decibels(mid),
                 treble: Decibels(treble),
             };
+            if session.remove_audio {
+                editor.audio_tracks = AudioTracks::Remove;
+            }
         }
         Some(editor)
     }
@@ -200,7 +205,14 @@ impl Editor {
         AudioChanges {
             gain: self.gain,
             equalizer: self.equalizer,
+            tracks: self.audio_tracks,
         }
+    }
+
+    /// Lets the player be heard as the export will be: with the gain and EQ, or silent.
+    pub fn preview_audio(&self, player: &mut playback::Player) {
+        player.set_audio_edits(self.gain, self.equalizer);
+        player.set_silenced(self.audio_tracks == AudioTracks::Remove);
     }
 
     fn request(&self) -> TrimRequest {
@@ -246,6 +258,7 @@ impl Editor {
                 self.equalizer.mid.0,
                 self.equalizer.treble.0,
             ],
+            remove_audio: self.audio_tracks == AudioTracks::Remove,
             saved_at: now,
         }
     }
@@ -289,10 +302,10 @@ impl Editor {
             plan.end.0,
             plan.stream.0,
             plan.reencode.map_or(0, |head| head.frames),
-            if self.audio_changes().is_none() {
-                "copied"
-            } else {
-                "re-encoded"
+            match (self.audio_tracks, self.audio_changes().reencodes()) {
+                (AudioTracks::Remove, _) => "removed",
+                (AudioTracks::Keep, true) => "re-encoded",
+                (AudioTracks::Keep, false) => "copied",
             }
         ));
         self.export = Some(ExportJob::start(ExportRequest {

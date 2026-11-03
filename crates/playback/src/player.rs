@@ -87,6 +87,8 @@ pub struct Player {
     hardware_decoding: Option<bool>,
     volume: Volume,
     muted: bool,
+    /// Silenced apart from the user's mute, e.g. to preview a clip without its audio.
+    silenced: bool,
     effects: AudioEffects,
     subtitles: SubtitleList,
     pending_start: Option<Ticks>,
@@ -143,6 +145,7 @@ impl Player {
             hardware_decoding: None,
             volume: options.volume,
             muted: options.muted,
+            silenced: false,
             effects,
             subtitles: SubtitleList::default(),
             pending_start: options.start_at.filter(|t| t.0 > 0),
@@ -431,9 +434,15 @@ impl Player {
         self.apply_volume();
     }
 
+    /// Plays silence without touching the user's mute; the audio clock keeps running.
+    pub fn set_silenced(&mut self, silenced: bool) {
+        self.silenced = silenced;
+        self.apply_volume();
+    }
+
     fn apply_volume(&self) {
         if let Some(audio) = &self.audio {
-            audio.set_volume(self.volume, self.muted);
+            audio.set_volume(self.volume, self.muted || self.silenced);
         }
     }
 

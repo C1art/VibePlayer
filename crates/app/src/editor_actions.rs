@@ -40,9 +40,7 @@ impl VibePlayerApp {
             ctx,
         ) {
             Some(editor) => {
-                session
-                    .player
-                    .set_audio_edits(editor.gain, editor.equalizer);
+                editor.preview_audio(&mut session.player);
                 self.editor = Some(editor);
                 self.info_open = false;
             }
@@ -69,6 +67,7 @@ impl VibePlayerApp {
             session
                 .player
                 .set_audio_edits(media::Decibels(0), media::Equalizer::default());
+            session.player.set_silenced(false);
         }
     }
 
@@ -157,7 +156,7 @@ impl VibePlayerApp {
                         editor.previewing = true;
                     }
                     EditorAction::AudioChanged => {
-                        player.set_audio_edits(editor.gain, editor.equalizer);
+                        editor.preview_audio(player);
                     }
                     _ => {}
                 }

@@ -11,16 +11,30 @@ use crate::ExportError;
 use crate::lead_in::{self, SubtitleOutput};
 use crate::smart::SmartHead;
 
-/// Audio edits that force audio, and only audio, to be re-encoded.
+/// What happens to the audio streams. Gain and EQ force audio, and only audio, to be
+/// re-encoded; removing it re-encodes nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AudioChanges {
     pub gain: Decibels,
     pub equalizer: Equalizer,
+    pub tracks: AudioTracks,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AudioTracks {
+    #[default]
+    Keep,
+    Remove,
 }
 
 impl AudioChanges {
     pub fn is_none(&self) -> bool {
-        self.gain.0 == 0 && self.equalizer.is_flat()
+        self.tracks == AudioTracks::Keep && !self.reencodes()
+    }
+
+    /// Whether kept audio must be re-encoded to apply the gain or EQ.
+    pub fn reencodes(&self) -> bool {
+        self.tracks == AudioTracks::Keep && (self.gain.0 != 0 || !self.equalizer.is_flat())
     }
 }
 
@@ -78,7 +92,9 @@ pub(crate) fn remux(
             outputs.push(None);
             continue;
         };
-        let output = if stream.kind == StreamKind::Audio && !audio.is_none() {
+        let output = if stream.kind == StreamKind::Audio && audio.tracks == AudioTracks::Remove {
+            None
+        } else if stream.kind == StreamKind::Audio && audio.reencodes() {
             reencoded_audio = true;
             let params = demuxer.stream_params(stream.index)?;
             let bit_rate = stream.bit_rate.unwrap_or(DEFAULT_AUDIO_BIT_RATE);

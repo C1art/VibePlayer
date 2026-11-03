@@ -49,6 +49,8 @@ pub struct CutSession {
     pub gain: i16,
     #[serde(default)]
     pub equalizer: [i16; 3],
+    #[serde(default)]
+    pub remove_audio: bool,
     pub saved_at: u64,
 }
 
