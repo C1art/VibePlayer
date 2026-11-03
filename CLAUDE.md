@@ -42,7 +42,8 @@ Cargo workspace. Dependencies flow downward only; `cut` and `library` never depe
 - `crates/export/` — runs a cut plan through `media`: stream copy, smart-cut head re-encode, audio-only re-encode for volume/EQ, verification
 - `crates/update/` — release check, version comparison, ask-later and skipped-version rules, installer download
 - `crates/library/` — settings, recents, resume positions, cut sessions, update preferences in `%APPDATA%\VibePlayer`
-- `installer/` — Inno Setup script (`vibeplayer.iss`) and the Windows CI workflow (`windows-ci.yml`; belongs in `.github/workflows/`, which this agent can't push)
+- `installer/` — Inno Setup script (`vibeplayer.iss`)
+- `.github/workflows/windows-ci.yml` — Windows CI and releases (this agent can't push workflow files; propose changes for the user to commit)
 - `tests/fixtures/` — small media files for integration tests; regenerate with `generate.sh`
 
 ## Commands
@@ -55,7 +56,7 @@ Cargo workspace. Dependencies flow downward only; `cut` and `library` never depe
 - Test: `cargo test -p <crate>` or `cargo test --workspace`
 - Before building, set `FFMPEG_DIR` to a shared GPL FFmpeg build, 8.1 or newer (BtbN `win64-gpl-shared`); without `libx264`/`libx265` smart cut is unavailable.
 - Linux also builds and tests, for development only; it needs `pkg-config` and the ALSA, X11 and FFmpeg dev packages. Without a sound card, run `pulseaudio -D` so audio-clock paths are exercised.
-- Release: tag `vX.Y.Z`; CI attaches `VibePlayer-X.Y.Z-setup.exe`, which the updater looks for.
+- Release: bump `version` in the root `Cargo.toml` and merge to `main`; CI creates the `vX.Y.Z` tag and release with `VibePlayer-X.Y.Z-setup.exe`, which the updater looks for. Only bump the version when the user asks for a release or agrees to one.
 
 After every change, in order: format, lint, test the changed crate. Test the whole workspace before committing.
 

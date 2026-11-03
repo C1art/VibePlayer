@@ -61,11 +61,11 @@ Tests: `cargo test --workspace`; decoding and export tests against `tests/fixtur
 
 ## Releasing
 
-1. Bump `version` in the root `Cargo.toml`.
-2. Tag the commit `vX.Y.Z` and push the tag.
-3. The Windows workflow (`installer/windows-ci.yml`, to be moved to `.github/workflows/`)
-   builds the installer and attaches it to the GitHub release. The in-app updater looks for
-   the newest non-prerelease whose asset ends in `-setup.exe`.
+1. Bump `version` in the root `Cargo.toml` and merge it to `main`.
+2. The Windows workflow (`.github/workflows/windows-ci.yml`) builds and tests it, then creates
+   the `vX.Y.Z` tag and a GitHub release with the installer attached. Merges that don't change
+   the version publish nothing. The in-app updater looks for the newest non-prerelease whose
+   asset ends in `-setup.exe`.
 
 ## License
 
