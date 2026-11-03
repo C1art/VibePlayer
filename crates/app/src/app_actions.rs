@@ -85,11 +85,6 @@ impl VibePlayerApp {
                 self.osd.show(format!("{direction}{} s", seconds.abs()));
             }
             Action::SeekTo { position, mode } => player.seek(position, mode),
-            Action::SeekToTenth(tenth) => {
-                if let Some(duration) = player.duration() {
-                    player.seek(Ticks(duration.0 / 10 * i64::from(tenth)), SeekMode::Exact);
-                }
-            }
             Action::StepForward => player.step_forward(now),
             Action::StepBack => player.step_backward(now),
             Action::NextChapter | Action::PreviousChapter => {

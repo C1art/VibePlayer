@@ -685,7 +685,6 @@ fn moves_playhead(action: &Action) -> bool {
         action,
         Action::SeekTo { .. }
             | Action::SeekBy { .. }
-            | Action::SeekToTenth(_)
             | Action::NextChapter
             | Action::PreviousChapter
             | Action::StepBack
