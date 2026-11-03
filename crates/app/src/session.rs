@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Instant;
 
 use cut::Ticks;
@@ -6,6 +7,7 @@ use eframe::egui::{self, TextureHandle};
 use playback::{LoadState, Player, PlayerOptions};
 use thumbnails::{BoundedCache, Bucket, Thumbnails};
 
+use crate::chapters::ChapterMark;
 use crate::diagnostics::PlaybackLog;
 use crate::seek_bar;
 
@@ -18,6 +20,8 @@ pub struct Session {
     textures: BoundedCache<Bucket, TextureHandle>,
     pub title_shown: bool,
     pub log: PlaybackLog,
+    /// Filled in once the file has opened.
+    pub chapters: Rc<[ChapterMark]>,
 }
 
 impl Session {
@@ -28,6 +32,7 @@ impl Session {
             textures: BoundedCache::new(THUMBNAIL_TEXTURES),
             title_shown: false,
             log: PlaybackLog::default(),
+            chapters: Rc::from([]),
         }
     }
 

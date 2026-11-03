@@ -212,6 +212,9 @@ impl MediaControls {
             let controls: SystemMediaTransportControls = unsafe { interop.GetForWindow(window)? };
             controls.SetIsPlayEnabled(true)?;
             controls.SetIsPauseEnabled(true)?;
+            // Next and previous track step through chapters.
+            controls.SetIsNextEnabled(true)?;
+            controls.SetIsPreviousEnabled(true)?;
             controls.SetIsEnabled(true)?;
             controls.ButtonPressed(&TypedEventHandler::new(
                 move |_: Ref<SystemMediaTransportControls>,
@@ -226,6 +229,10 @@ impl MediaControls {
                             }
                             SystemMediaTransportControlsButton::Rewind => {
                                 Some(Action::SeekBy { seconds: -10 })
+                            }
+                            SystemMediaTransportControlsButton::Next => Some(Action::NextChapter),
+                            SystemMediaTransportControlsButton::Previous => {
+                                Some(Action::PreviousChapter)
                             }
                             _ => None,
                         };

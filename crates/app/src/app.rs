@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use crossbeam::channel::Receiver;
 use std::time::{Duration, Instant};
@@ -18,7 +19,7 @@ use crate::osd::Osd;
 use crate::session::Session;
 use crate::subtitles::SubtitleOverlay;
 use crate::window_state::WindowTracker;
-use crate::{diagnostics, shortcuts, theme, video_view, welcome};
+use crate::{chapters, diagnostics, shortcuts, theme, video_view, welcome};
 
 /// Controls hide after the pointer rests this long during playback.
 const CONTROLS_IDLE: Duration = Duration::from_millis(2200);
@@ -200,6 +201,7 @@ impl VibePlayerApp {
             LoadState::Ready(opened) if !session.title_shown => {
                 session.title_shown = true;
                 log::info(format!("opened {}", diagnostics::describe(&opened.info)));
+                session.chapters = chapters::marks(&opened.info).into();
                 // Only files that actually opened belong in Recent.
                 self.history.add_recent(session.player.path(), unix_now());
                 if let Some(saver) = &self.saver {
@@ -488,6 +490,7 @@ impl VibePlayerApp {
                 audio_stream: opened.audio,
                 subtitle_stream: opened.subtitle,
                 highlight: None,
+                chapters: Rc::clone(&session.chapters),
             };
             let mut preview = |at: Ticks| session.thumbnail(&ctx, at);
             over = controls::show(ui, area, &state, &mut preview, actions);

@@ -77,6 +77,8 @@ pub fn read(ctx: &egui::Context, seek_step: i64) -> Vec<Action> {
         pressed(Modifiers::NONE, Key::O, Action::TrimEndHere);
         pressed(Modifiers::NONE, Key::A, Action::CycleAudio);
         pressed(Modifiers::NONE, Key::S, Action::CycleSubtitles);
+        pressed(Modifiers::NONE, Key::PageDown, Action::NextChapter);
+        pressed(Modifiers::NONE, Key::PageUp, Action::PreviousChapter);
         let digits = [
             Key::Num0,
             Key::Num1,
@@ -109,6 +111,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("[ / ]", "Slower / faster"),
     ("Backspace", "Normal speed"),
     ("0 – 9", "Jump to 0% – 90%"),
+    ("PgUp / PgDn", "Previous / next chapter"),
     ("A / S", "Next audio / subtitle track"),
     ("F / double-click", "Fullscreen"),
     ("Tab", "File info"),

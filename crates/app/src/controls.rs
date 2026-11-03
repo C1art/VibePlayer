@@ -1,9 +1,12 @@
+use std::rc::Rc;
+
 use cut::{ClockPrecision, ClockTime, StreamIndex, Ticks, Timebase};
 use eframe::egui::{self, Color32, Rect, TextureHandle, pos2, vec2};
 use media::{MediaInfo, Speed, StreamKind};
 use playback::SeekMode;
 
 use crate::actions::{Action, SPEEDS};
+use crate::chapters::ChapterMark;
 use crate::icons::Icon;
 use crate::seek_bar::{Range, SeekBar};
 use crate::theme;
@@ -25,6 +28,7 @@ pub struct ControlsState<'a> {
     pub audio_stream: Option<StreamIndex>,
     pub subtitle_stream: Option<StreamIndex>,
     pub highlight: Option<Range>,
+    pub chapters: Rc<[ChapterMark]>,
 }
 
 /// Draws the bottom overlay and returns what the user asked for. Also reports whether the
@@ -53,6 +57,7 @@ pub fn show(
             start: range.start,
             end: range.end,
         }),
+        chapters: &state.chapters,
         preview: Some(preview),
     }
     .show(ui);

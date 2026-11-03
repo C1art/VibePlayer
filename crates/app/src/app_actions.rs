@@ -7,6 +7,7 @@ use playback::SeekMode;
 
 use crate::actions::{self, Action};
 use crate::app::VibePlayerApp;
+use crate::chapters;
 use crate::controls::format_speed;
 use crate::os;
 use crate::subtitles::SubtitleOverlay;
@@ -86,6 +87,27 @@ impl VibePlayerApp {
             }
             Action::StepForward => player.step_forward(now),
             Action::StepBack => player.step_backward(now),
+            Action::NextChapter | Action::PreviousChapter => {
+                let marks = &session.chapters;
+                let position = player.position();
+                let target = if action == Action::NextChapter {
+                    chapters::next(marks, position)
+                } else {
+                    chapters::previous(marks, position)
+                };
+                match target {
+                    Some(index) => {
+                        player.seek(marks[index].start, SeekMode::Exact);
+                        self.osd.show(chapters::label(marks, index));
+                    }
+                    None if marks.is_empty() => self.osd.show("No chapters"),
+                    None if action == Action::NextChapter => self.osd.show("Last chapter"),
+                    None => {
+                        player.seek(Ticks::ZERO, SeekMode::Exact);
+                        self.osd.show(chapters::label(marks, 0));
+                    }
+                }
+            }
             Action::VolumeBy(delta) => {
                 let volume = player.volume().step(delta);
                 player.set_volume(volume);

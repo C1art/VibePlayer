@@ -4,6 +4,7 @@
 mod actions;
 mod app;
 mod app_actions;
+mod chapters;
 mod controls;
 mod diagnostics;
 mod editor;
