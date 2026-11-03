@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use cut::{Ticks, Timebase};
 use media::{
-    AudioDecoder, AudioEffects, AudioTarget, Demuxer, HardwareDecoding, Packet, Speed,
+    AudioDecoder, AudioEffects, AudioTarget, Demuxer, HardwareDecoding, Packet, Rotation, Speed,
     StreamDetails, StreamKind, SubtitleContent, SubtitleDecoder, ThumbnailExtractor, Transfer,
     VideoDecoder, VideoFrame, VideoOptions,
 };
@@ -193,6 +193,17 @@ fn thumbnails_are_scaled_to_the_requested_width() {
     let image = extractor.extract(Ticks(1_000_000)).unwrap().unwrap();
     assert_eq!((image.width, image.height), (160, 90));
     assert_eq!(image.pixels.len(), 160 * 90 * 4);
+}
+
+#[test]
+#[ignore]
+fn sideways_videos_report_their_turn_and_get_upright_thumbnails() {
+    let demuxer = Demuxer::open(&fixture("rotated.mp4")).unwrap();
+    let info = demuxer.info();
+    assert_eq!(info.video().unwrap().1.rotation, Rotation::Clockwise90);
+    let mut extractor = ThumbnailExtractor::open(&fixture("rotated.mp4"), 160).unwrap();
+    let image = extractor.extract(Ticks(1_000_000)).unwrap().unwrap();
+    assert_eq!((image.width, image.height), (90, 160));
 }
 
 #[test]

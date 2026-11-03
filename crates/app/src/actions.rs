@@ -20,9 +20,9 @@ pub enum Action {
         position: Ticks,
         mode: SeekMode,
     },
-    /// Jump to a tenth of the duration, 0–9.
-    SeekToTenth(u8),
+    /// From the system media controls.
     NextChapter,
+    #[cfg_attr(not(windows), allow(dead_code))]
     PreviousChapter,
     StepForward,
     StepBack,
@@ -47,6 +47,7 @@ pub enum Action {
     CycleAudio,
     CycleSubtitles,
     CloseFile,
+    ClearRecents,
     Editor(crate::editor::EditorAction),
 }
 

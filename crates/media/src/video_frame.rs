@@ -2,9 +2,9 @@
 
 use cut::Ticks;
 
-use crate::ColorInfo;
 use crate::ffi::{Frame, MasteringLuminance};
 use crate::gpu::{GpuPicture, GpuSharing};
+use crate::{ColorInfo, Rotation};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HardwareDecoding {
@@ -87,6 +87,7 @@ pub struct VideoFrame {
     pub layout: PlaneLayout,
     pub color: ColorInfo,
     pub luminance: MasteringLuminance,
+    pub rotation: Rotation,
     /// Set when the picture stayed on the GPU; the planes are then empty.
     pub gpu: Option<GpuPicture>,
 }
@@ -116,7 +117,7 @@ impl VideoFrame {
         &mut self.frame
     }
 
-    /// Display width over height, including non-square pixels.
+    /// Display width over height, including non-square pixels and the display rotation.
     pub fn display_aspect(&self) -> f32 {
         let (num, den) = self.frame.sample_aspect_ratio();
         let pixel_aspect = if num > 0 && den > 0 {
@@ -124,7 +125,12 @@ impl VideoFrame {
         } else {
             1.0
         };
-        self.width() as f32 * pixel_aspect / self.height().max(1) as f32
+        let aspect = self.width() as f32 * pixel_aspect / self.height().max(1) as f32;
+        if self.rotation.is_sideways() {
+            1.0 / aspect
+        } else {
+            aspect
+        }
     }
 }
 

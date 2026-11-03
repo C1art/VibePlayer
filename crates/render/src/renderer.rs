@@ -37,7 +37,8 @@ pub struct VideoRenderer {
     /// Set for an scRGB surface on an HDR display.
     display: Option<DisplayLevels>,
     /// The shown frame's color description, to redo the color setup when the display changes.
-    shown_color: Option<(media::ColorInfo, PlaneLayout, Option<f32>)>,
+    /// The shown frame's colors, peak brightness and turn, kept to redo its parameters.
+    shown_color: Option<(media::ColorInfo, PlaneLayout, Option<f32>, media::Rotation)>,
     high_bit_depth: bool,
 }
 
@@ -62,7 +63,7 @@ impl VideoRenderer {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -235,12 +236,12 @@ impl VideoRenderer {
             .luminance
             .max_content
             .or(frame.luminance.max_mastering);
-        self.shown_color = Some((frame.color, frame.layout, peak));
+        self.shown_color = Some((frame.color, frame.layout, peak, frame.rotation));
         self.write_shown_color(queue);
     }
 
     fn write_shown_color(&self, queue: &wgpu::Queue) {
-        let Some((color, layout, peak)) = self.shown_color else {
+        let Some((color, layout, peak, rotation)) = self.shown_color else {
             return;
         };
         let output = match (self.linear_target, self.display) {
@@ -251,7 +252,8 @@ impl VideoRenderer {
             (true, None) => Output::Linear,
             (false, _) => Output::Gamma,
         };
-        let params = ColorParams::new(color, layout, peak, output);
+        let mut params = ColorParams::new(color, layout, peak, output);
+        params.flags[2] = f32::from(rotation.quarter_turns());
         queue.write_buffer(&self.uniforms, 0, &params.to_bytes());
     }
 

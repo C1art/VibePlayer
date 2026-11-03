@@ -63,6 +63,9 @@ rm cover.png
 # The general fixture in MPEG-TS, whose demuxer seeks by decode time.
 ff -i h264_bframes.mp4 -c copy -f mpegts h264_bframes.ts
 
+# Stored sideways with a display matrix, as phones record portrait video (needs FFmpeg 6.1+).
+ff -display_rotation -90 -i h264_bframes.mp4 -c copy rotated.mp4
+
 # Audio that ends three seconds in, while the video goes on to twenty.
 ff -f lavfi -i "testsrc2=size=160x90:rate=25:duration=20" -f lavfi -i "$tone:duration=3" \
   -c:v libx264 -preset veryfast -crf 36 -pix_fmt yuv420p -g 50 -c:a aac -b:a 48k short_audio.mp4

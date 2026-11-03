@@ -61,7 +61,8 @@ pub fn show(
             )
             .changed();
             ui.horizontal(|ui| {
-                ui.label("Arrow keys skip");
+                ui.label("Skip buttons and arrow keys")
+                    .on_hover_text("How far the skip buttons and the arrow keys jump");
                 let mut step = settings.seek_step_seconds as f32 / 30.0;
                 if let Some(value) = widgets::thin_slider(ui, step, 140.0) {
                     step = value;

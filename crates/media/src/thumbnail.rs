@@ -5,7 +5,7 @@ use cut::{StreamIndex, Ticks, Timebase};
 use crate::ffi::{
     CodecContext, FilterGraph, FilterMedia, Frame, Packet, Received, pixel_format_name,
 };
-use crate::{Demuxer, MediaError, StreamKind};
+use crate::{Demuxer, MediaError, Rotation, StreamKind};
 
 /// A small straight-alpha RGBA image with tightly packed rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,6 +27,7 @@ pub struct ThumbnailExtractor {
     /// The file's start time in microseconds; positions asked for are relative to it.
     origin: Ticks,
     max_width: u32,
+    rotation: Rotation,
     filter: Option<(FilterKey, FilterGraph)>,
     packet: Packet,
     decoded: Frame,
@@ -49,6 +50,7 @@ impl ThumbnailExtractor {
             demuxer,
             stream,
             max_width: max_width.max(16),
+            rotation: params.view().rotation(),
             filter: None,
             packet: Packet::new()?,
             decoded: Frame::new()?,
@@ -56,8 +58,13 @@ impl ThumbnailExtractor {
         })
     }
 
+    /// The file's duration in microseconds, if the container says.
+    pub fn duration(&self) -> Option<Ticks> {
+        self.demuxer.input().duration()
+    }
+
     /// The keyframe at or before `at` (microseconds from the start of the file), scaled to fit
-    /// the maximum width at the picture's display aspect.
+    /// the maximum width at the picture's display aspect, then turned upright.
     pub fn extract(&mut self, at: Ticks) -> Result<Option<RgbaImage>, MediaError> {
         let target = (at + self.origin).rescale(Timebase::MICROS, self.timebase);
         self.demuxer.seek_stream(self.stream, target)?;
@@ -102,7 +109,13 @@ impl ThumbnailExtractor {
                 self.timebase.den()
             );
             let (width, height) = thumbnail_size(key.0, key.1, key.3, self.max_width);
-            let description = format!("scale={width}:{height}:flags=bilinear,format=rgba");
+            let turn = match self.rotation {
+                Rotation::None => "",
+                Rotation::Clockwise90 => ",transpose=clock",
+                Rotation::Half => ",hflip,vflip",
+                Rotation::Clockwise270 => ",transpose=cclock",
+            };
+            let description = format!("scale={width}:{height}:flags=bilinear{turn},format=rgba");
             self.filter = Some((
                 key,
                 FilterGraph::new(FilterMedia::Video, &args, &description)?,

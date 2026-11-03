@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use eframe::egui::{self, Align, Layout, RichText, Sense, vec2};
+use eframe::egui::{self, Align, Layout, RichText, Sense, TextureHandle, vec2};
 use library::RecentFile;
 
 use crate::actions::Action;
@@ -12,6 +12,7 @@ use crate::widgets::{self, Kind};
 pub fn show(
     ui: &mut egui::Ui,
     recents: &[RecentFile],
+    poster: &mut dyn FnMut(&Path) -> Option<TextureHandle>,
     error: Option<&str>,
     actions: &mut Vec<Action>,
 ) {
@@ -57,9 +58,17 @@ pub fn show(
             if !recents.is_empty() {
                 ui.add_space(30.0);
                 ui.allocate_ui_with_layout(vec2(420.0, 0.0), Layout::top_down(Align::Min), |ui| {
-                    widgets::section_title(ui, "Recent");
+                    ui.horizontal(|ui| {
+                        widgets::section_title(ui, "Recent");
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if text_link(ui, "Clear history").clicked() {
+                                actions.push(Action::ClearRecents);
+                            }
+                        });
+                    });
                     for recent in recents.iter().take(6) {
-                        if recent_row(ui, recent).clicked() {
+                        let still = poster(&recent.path);
+                        if recent_row(ui, recent, still.as_ref()).clicked() {
                             actions.push(Action::Open(PathBuf::from(&recent.path)));
                         }
                     }
@@ -69,7 +78,14 @@ pub fn show(
     });
 }
 
-fn recent_row(ui: &mut egui::Ui, recent: &RecentFile) -> egui::Response {
+const ROW: egui::Vec2 = vec2(420.0, 58.0);
+const STILL: egui::Vec2 = vec2(80.0, 45.0);
+
+fn recent_row(
+    ui: &mut egui::Ui,
+    recent: &RecentFile,
+    still: Option<&TextureHandle>,
+) -> egui::Response {
     let name = recent
         .path
         .file_name()
@@ -80,27 +96,66 @@ fn recent_row(ui: &mut egui::Ui, recent: &RecentFile) -> egui::Response {
         .parent()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
-    let (rect, response) = ui.allocate_exact_size(vec2(420.0, 44.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(ROW, Sense::click());
     if response.hovered() {
         ui.painter().rect_filled(rect, 8.0, theme::HOVER);
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    let icon = egui::Rect::from_center_size(rect.left_center() + vec2(20.0, 0.0), vec2(16.0, 16.0));
-    icons::paint(ui.painter(), icon, Icon::Play, theme::accent_soft());
-    let painter = ui.painter_at(rect.shrink2(vec2(40.0, 0.0)).with_min_x(rect.left() + 40.0));
+    let frame =
+        egui::Rect::from_min_size(rect.left_top() + vec2(6.0, (ROW.y - STILL.y) / 2.0), STILL);
+    paint_still(ui, frame, still);
+    let text_left = frame.right() + 12.0;
+    let painter = ui.painter_at(rect.with_min_x(text_left).shrink2(vec2(0.0, 2.0)));
     painter.text(
-        rect.left_top() + vec2(40.0, 6.0),
+        egui::pos2(text_left, rect.top() + 10.0),
         egui::Align2::LEFT_TOP,
         name,
         egui::FontId::proportional(14.5),
         theme::TEXT,
     );
     painter.text(
-        rect.left_bottom() + vec2(40.0, -6.0),
+        egui::pos2(text_left, rect.bottom() - 10.0),
         egui::Align2::LEFT_BOTTOM,
         folder,
         egui::FontId::proportional(12.0),
         theme::TEXT_DIM,
     );
     response.on_hover_text(recent.path.display().to_string())
+}
+
+/// A small dim text button that brightens on hover.
+fn text_link(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        egui::FontId::proportional(12.0),
+        egui::Color32::PLACEHOLDER,
+    );
+    let (rect, response) = ui.allocate_exact_size(galley.size(), Sense::click());
+    let color = if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        theme::TEXT
+    } else {
+        theme::TEXT_DIM
+    };
+    ui.painter().galley(rect.min, galley, color);
+    response
+}
+
+/// The file's still, letterboxed in `frame`, or a play mark while there is none.
+fn paint_still(ui: &egui::Ui, frame: egui::Rect, still: Option<&TextureHandle>) {
+    let painter = ui.painter();
+    painter.rect_filled(frame, 6.0, theme::PANEL_RAISED);
+    let Some(still) = still else {
+        let icon = egui::Rect::from_center_size(frame.center(), vec2(16.0, 16.0));
+        icons::paint(painter, icon, Icon::Play, theme::accent_soft());
+        return;
+    };
+    let [width, height] = still.size();
+    let aspect = width as f32 / height.max(1) as f32;
+    let fitted = crate::video_view::fit(frame, aspect);
+    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+    painter.add(
+        egui::epaint::RectShape::filled(fitted, 6.0, egui::Color32::WHITE)
+            .with_texture(still.id(), uv),
+    );
 }

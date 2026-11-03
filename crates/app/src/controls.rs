@@ -13,6 +13,8 @@ use crate::theme;
 use crate::widgets::{icon_button, pill_button, thin_slider, vertical_fade};
 
 pub const HEIGHT: f32 = 104.0;
+/// The band at the top holding the file buttons.
+pub const TOP_HEIGHT: f32 = 64.0;
 
 /// Everything the control bar shows.
 pub struct ControlsState<'a> {
@@ -24,6 +26,8 @@ pub struct ControlsState<'a> {
     pub muted: bool,
     pub speed: Speed,
     pub fullscreen: bool,
+    /// The skip buttons' step, the same as the arrow keys'.
+    pub seek_step_seconds: u32,
     pub info: &'a MediaInfo,
     pub audio_stream: Option<StreamIndex>,
     pub subtitle_stream: Option<StreamIndex>,
@@ -85,11 +89,18 @@ pub fn show(
         if icon_button(ui, play_icon, 40.0, "Play / pause (Space)").clicked() {
             actions.push(Action::TogglePlay);
         }
-        if icon_button(ui, Icon::SkipBack, 34.0, "Back 10 s (J)").clicked() {
-            actions.push(Action::SeekBy { seconds: -10 });
+        let step = state.seek_step_seconds;
+        let back = format!("Back {step} s (←)");
+        if icon_button(ui, Icon::SeekBack(step), 36.0, &back).clicked() {
+            actions.push(Action::SeekBy {
+                seconds: -i64::from(step),
+            });
         }
-        if icon_button(ui, Icon::SkipForward, 34.0, "Forward 10 s (L)").clicked() {
-            actions.push(Action::SeekBy { seconds: 10 });
+        let forward = format!("Forward {step} s (→)");
+        if icon_button(ui, Icon::SeekForward(step), 36.0, &forward).clicked() {
+            actions.push(Action::SeekBy {
+                seconds: i64::from(step),
+            });
         }
         ui.add_space(6.0);
         let volume_icon = if state.muted || state.volume.percent() == 0 {
@@ -136,15 +147,6 @@ pub fn show(
             if icon_button(ui, Icon::Scissors, 34.0, "Trim (E)").clicked() {
                 actions.push(Action::ToggleEditor);
             }
-            if icon_button(ui, Icon::Info, 34.0, "File info (Tab)").clicked() {
-                actions.push(Action::ToggleInfo);
-            }
-            if icon_button(ui, Icon::Settings, 34.0, "Settings (Ctrl + ,)").clicked() {
-                actions.push(Action::ToggleSettings);
-            }
-            if icon_button(ui, Icon::Folder, 34.0, "Open file (Ctrl + O)").clicked() {
-                actions.push(Action::ShowOpenDialog);
-            }
             tracks_menu(ui, state, actions);
             let speed = format!("{}×", format_speed(state.speed));
             let response = pill_button(ui, &speed, "Playback speed ([ / ])");
@@ -160,6 +162,37 @@ pub fn show(
             });
         });
     });
+    ui.ctx()
+        .pointer_hover_pos()
+        .is_some_and(|pointer| rect.contains(pointer))
+}
+
+/// The file buttons in the top right corner, shown with the controls. Returns whether the
+/// pointer is in their band.
+pub fn top_bar(ui: &mut egui::Ui, area: Rect, actions: &mut Vec<Action>) -> bool {
+    let rect = Rect::from_min_max(
+        pos2(area.left(), area.top()),
+        pos2(area.right(), area.top() + TOP_HEIGHT),
+    );
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect.shrink2(vec2(16.0, 10.0)))
+            .layout(egui::Layout::right_to_left(egui::Align::Min)),
+    );
+    let ui = &mut child;
+    ui.spacing_mut().item_spacing.x = 4.0;
+    if icon_button(ui, Icon::Close, 34.0, "Close file (Ctrl + W)").clicked() {
+        actions.push(Action::CloseFile);
+    }
+    if icon_button(ui, Icon::Settings, 34.0, "Settings (Ctrl + ,)").clicked() {
+        actions.push(Action::ToggleSettings);
+    }
+    if icon_button(ui, Icon::Info, 34.0, "File info (Tab)").clicked() {
+        actions.push(Action::ToggleInfo);
+    }
+    if icon_button(ui, Icon::Folder, 34.0, "Open file (Ctrl + O)").clicked() {
+        actions.push(Action::ShowOpenDialog);
+    }
     ui.ctx()
         .pointer_hover_pos()
         .is_some_and(|pointer| rect.contains(pointer))

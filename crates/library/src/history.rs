@@ -49,6 +49,8 @@ pub struct CutSession {
     pub gain: i16,
     #[serde(default)]
     pub equalizer: [i16; 3],
+    #[serde(default)]
+    pub remove_audio: bool,
     pub saved_at: u64,
 }
 
@@ -74,6 +76,12 @@ impl History {
             },
         );
         self.recents.truncate(MAX_RECENTS);
+    }
+
+    /// Forgets which files were opened and where they were left off; saved cuts stay.
+    pub fn clear_watch_history(&mut self) {
+        self.recents.clear();
+        self.resume.clear();
     }
 
     pub fn resume_position(&self, path: &Path) -> Option<Ticks> {

@@ -19,7 +19,7 @@ use crate::osd::Osd;
 use crate::session::Session;
 use crate::subtitles::SubtitleOverlay;
 use crate::window_state::WindowTracker;
-use crate::{chapters, diagnostics, shortcuts, theme, video_view, welcome};
+use crate::{chapters, diagnostics, shortcut_help, shortcuts, theme, video_view, welcome};
 
 /// Controls hide after the pointer rests this long during playback.
 const CONTROLS_IDLE: Duration = Duration::from_millis(2200);
@@ -32,6 +32,7 @@ pub struct VibePlayerApp {
     native_window: Option<crate::os::NativeWindow>,
     pub(crate) settings: Settings,
     pub(crate) history: History,
+    pub(crate) recent_posters: crate::recent_posters::RecentPosters,
     pub(crate) session: Option<Session>,
     pub(crate) error: Option<String>,
     pub(crate) osd: Osd,
@@ -82,6 +83,7 @@ impl VibePlayerApp {
             window,
             native_window,
             history,
+            recent_posters: Default::default(),
             session: None,
             error: None,
             osd: Osd::default(),
@@ -364,9 +366,15 @@ impl eframe::App for VibePlayerApp {
         ui.painter().rect_filled(area, 0.0, Color32::BLACK);
         let over_controls = match &mut self.session {
             None => {
+                self.recent_posters.poll(&ctx);
+                let history = &self.history;
+                let posters = &mut self.recent_posters;
+                let mut poster =
+                    |path: &std::path::Path| posters.get(path, history.resume_position(path));
                 welcome::show(
                     ui,
-                    &self.history.recents,
+                    &history.recents,
+                    &mut poster,
                     self.error.as_deref(),
                     &mut actions,
                 );
@@ -375,7 +383,7 @@ impl eframe::App for VibePlayerApp {
             Some(_) => self.show_player(ui, area, &mut actions),
         };
         if self.help_open {
-            shortcuts::show_help(&ctx, &mut self.help_open);
+            shortcut_help::show(&ctx, &mut self.help_open);
         }
         let mut settings_changed = false;
         if self.settings_open {
@@ -413,7 +421,9 @@ impl eframe::App for VibePlayerApp {
             ctx.request_repaint_after(Duration::from_millis(30));
         }
         let hide_cursor = self.session.is_some()
-            && self.fullscreen
+            && self.editor.is_none()
+            && !self.help_open
+            && !self.settings_open
             && !self.controls_visible(&ctx, over_controls);
         if hide_cursor {
             ctx.set_cursor_icon(CursorIcon::None);
@@ -452,16 +462,16 @@ impl VibePlayerApp {
     /// Draws the video, subtitles and controls. Returns whether the pointer is over controls.
     fn show_player(&mut self, ui: &mut egui::Ui, area: Rect, actions: &mut Vec<Action>) -> bool {
         let ctx = ui.ctx().clone();
-        let pointer_near_controls = ctx
-            .pointer_hover_pos()
-            .is_some_and(|p| p.y > area.bottom() - controls::HEIGHT);
+        let pointer_near_controls = ctx.pointer_hover_pos().is_some_and(|p| {
+            p.y > area.bottom() - controls::HEIGHT || p.y < area.top() + controls::TOP_HEIGHT
+        });
         let visible = self.controls_visible(&ctx, pointer_near_controls);
         let Some(session) = &mut self.session else {
             return false;
         };
         // Only the picture takes clicks: blank parts of the panels below must not toggle play.
         let panel_height = if self.editor.is_some() {
-            editor::HEIGHT
+            editor::height(area.width())
         } else if visible {
             controls::HEIGHT
         } else {
@@ -493,7 +503,7 @@ impl VibePlayerApp {
         let area = if self.editor.is_some() {
             Rect::from_min_max(
                 area.min,
-                egui::pos2(area.right(), area.bottom() - editor::HEIGHT),
+                egui::pos2(area.right(), area.bottom() - editor::height(area.width())),
             )
         } else {
             area
@@ -537,6 +547,7 @@ impl VibePlayerApp {
                 muted: session.player.is_muted(),
                 speed: session.player.speed(),
                 fullscreen: self.fullscreen,
+                seek_step_seconds: self.settings.seek_step_seconds,
                 info: &opened.info,
                 audio_stream: opened.audio,
                 subtitle_stream: opened.subtitle,
@@ -546,6 +557,7 @@ impl VibePlayerApp {
             let mut preview = |at: Ticks| session.thumbnail(&ctx, at);
             over = controls::show(ui, area, &state, &mut preview, actions);
             paint_title(ui, area, &opened.info.file_name());
+            over |= controls::top_bar(ui, area, actions);
         }
         if self.info_open {
             let stats = PlaybackStats {
@@ -645,7 +657,9 @@ fn paint_title(ui: &egui::Ui, area: Rect, name: &str) {
         Color32::from_black_alpha(170),
         Color32::TRANSPARENT,
     );
-    ui.painter().text(
+    // Clipped short of the file buttons on the right.
+    let room = Rect::from_min_max(band.min, egui::pos2(band.right() - 190.0, band.bottom()));
+    ui.painter_at(room).text(
         area.left_top() + egui::vec2(22.0, 20.0),
         egui::Align2::LEFT_TOP,
         name,
@@ -671,7 +685,6 @@ fn moves_playhead(action: &Action) -> bool {
         action,
         Action::SeekTo { .. }
             | Action::SeekBy { .. }
-            | Action::SeekToTenth(_)
             | Action::NextChapter
             | Action::PreviousChapter
             | Action::StepBack

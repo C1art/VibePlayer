@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use cut::{Ticks, TrimRequest};
-use export::{AudioChanges, ExportError, ExportRequest};
+use export::{AudioChanges, AudioTracks, ExportError, ExportRequest};
 use media::{Decibels, Demuxer, Packet, StreamKind};
 
 fn fixture(name: &str) -> PathBuf {
@@ -187,6 +187,25 @@ fn volume_changes_reencode_only_the_audio() {
         info.streams_of(StreamKind::Audio).next().unwrap().codec,
         "aac"
     );
+}
+
+#[test]
+#[ignore]
+fn removed_audio_leaves_only_the_other_streams_copied() {
+    let source = fixture("multi_audio.mkv");
+    let out = output("silent.mkv");
+    let plan = plan(&source, 0.5, 3.0);
+    let changes = AudioChanges {
+        gain: Decibels(60),
+        tracks: AudioTracks::Remove,
+        ..AudioChanges::default()
+    };
+    let result = export(&source, &out, plan, changes).unwrap();
+    assert!(!result.reencoded_audio);
+    let info = media::probe(&out).unwrap();
+    assert_eq!(info.streams_of(StreamKind::Audio).count(), 0);
+    let expected = video_payloads(&source, |p| plan.keeps_primary(p.pts().unwrap(), p.dts()));
+    assert_eq!(video_payloads(&out, |_| true), expected);
 }
 
 #[test]

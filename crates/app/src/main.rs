@@ -13,9 +13,11 @@ mod icons;
 mod info_panel;
 mod os;
 mod osd;
+mod recent_posters;
 mod seek_bar;
 mod session;
 mod settings_window;
+mod shortcut_help;
 mod shortcuts;
 #[cfg(test)]
 mod smoke_tests;

@@ -34,6 +34,11 @@ impl VibePlayerApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Title("VibePlayer".into()));
                 }
             }
+            Action::ClearRecents => {
+                self.history.clear_watch_history();
+                self.recent_posters.clear();
+                self.save_history();
+            }
             Action::ToggleFullscreen => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!self.fullscreen));
             }
@@ -80,11 +85,6 @@ impl VibePlayerApp {
                 self.osd.show(format!("{direction}{} s", seconds.abs()));
             }
             Action::SeekTo { position, mode } => player.seek(position, mode),
-            Action::SeekToTenth(tenth) => {
-                if let Some(duration) = player.duration() {
-                    player.seek(Ticks(duration.0 / 10 * i64::from(tenth)), SeekMode::Exact);
-                }
-            }
             Action::StepForward => player.step_forward(now),
             Action::StepBack => player.step_backward(now),
             Action::NextChapter | Action::PreviousChapter => {
@@ -168,6 +168,7 @@ impl VibePlayerApp {
             Action::ShowOpenDialog
             | Action::Open(_)
             | Action::CloseFile
+            | Action::ClearRecents
             | Action::ToggleFullscreen
             | Action::ExitFullscreen
             | Action::ToggleInfo
