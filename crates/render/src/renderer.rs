@@ -19,6 +19,10 @@ pub struct VideoRenderer {
     sampler: wgpu::Sampler,
     uniforms: wgpu::Buffer,
     planes: Option<PlaneTextures>,
+    /// What `paint` draws: the uploaded planes, or a picture that stayed on the GPU.
+    showing: Option<wgpu::BindGroup>,
+    #[cfg(windows)]
+    shared: crate::shared::SharedFrames,
     target_is_srgb: bool,
     high_bit_depth: bool,
 }
@@ -111,6 +115,9 @@ impl VideoRenderer {
             sampler,
             uniforms,
             planes: None,
+            showing: None,
+            #[cfg(windows)]
+            shared: crate::shared::SharedFrames::default(),
             target_is_srgb: target_format.is_srgb(),
             high_bit_depth: device
                 .features()
@@ -124,7 +131,7 @@ impl VideoRenderer {
     }
 
     pub fn has_frame(&self) -> bool {
-        self.planes.is_some()
+        self.showing.is_some()
     }
 
     /// Copies a frame to the GPU. Frames this renderer can't take are ignored.
@@ -137,6 +144,12 @@ impl VideoRenderer {
         if frame.width() > limit || frame.height() > limit {
             return;
         }
+        if frame.gpu.is_some() {
+            self.show_shared(device, queue, frame);
+            return;
+        }
+        #[cfg(windows)]
+        self.shared.release(queue);
         let key = (frame.width(), frame.height(), layout);
         if self.planes.as_ref().is_none_or(|planes| planes.key != key) {
             self.planes = Some(self.create_planes(device, key));
@@ -175,11 +188,36 @@ impl VideoRenderer {
                 size,
             );
         }
+        self.showing = Some(planes.bind_group.clone());
+        self.write_color(queue, frame);
+    }
+
+    /// Shows a picture the decoder left on the GPU.
+    #[cfg(windows)]
+    fn show_shared(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &VideoFrame) {
+        let Some(picture) = &frame.gpu else {
+            return;
+        };
+        let bindings = crate::shared::Bindings {
+            layout: &self.layout,
+            uniforms: &self.uniforms,
+            sampler: &self.sampler,
+        };
+        if let Some(bind_group) = self.shared.show(device, queue, picture, &bindings) {
+            self.showing = Some(bind_group.clone());
+            self.write_color(queue, frame);
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn show_shared(&mut self, _device: &wgpu::Device, _queue: &wgpu::Queue, _frame: &VideoFrame) {}
+
+    fn write_color(&self, queue: &wgpu::Queue, frame: &VideoFrame) {
         let peak = frame
             .luminance
             .max_content
             .or(frame.luminance.max_mastering);
-        let params = ColorParams::new(frame.color, layout, peak, self.target_is_srgb);
+        let params = ColorParams::new(frame.color, frame.layout, peak, self.target_is_srgb);
         queue.write_buffer(&self.uniforms, 0, &params.to_bytes());
     }
 
@@ -267,16 +305,21 @@ impl VideoRenderer {
 
     /// Draws the last uploaded frame over the render pass's current viewport.
     pub fn paint(&self, pass: &mut wgpu::RenderPass<'_>) {
-        let Some(planes) = &self.planes else {
+        let Some(bind_group) = &self.showing else {
             return;
         };
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &planes.bind_group, &[]);
+        pass.set_bind_group(0, bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
 
     /// Forgets the uploaded frame, e.g. when a file closes.
-    pub fn clear(&mut self) {
+    pub fn clear(&mut self, queue: &wgpu::Queue) {
+        #[cfg(windows)]
+        self.shared.release(queue);
+        #[cfg(not(windows))]
+        let _ = queue;
         self.planes = None;
+        self.showing = None;
     }
 }

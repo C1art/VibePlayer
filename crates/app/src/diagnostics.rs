@@ -17,12 +17,14 @@ pub fn log_startup(creation: &eframe::CreationContext<'_>, high_bit_depth: Optio
         Some(state) => {
             let adapter = state.adapter.get_info();
             log::info(format!(
-                "GPU {} ({:?}, driver {}), output {:?}, 16-bit video textures: {}",
+                "GPU {} ({:?}, driver {}), output {:?}, 16-bit video textures: {}, \
+                 decoded frames can stay on the GPU: {}",
                 adapter.name,
                 adapter.backend,
                 adapter.driver_info,
                 state.target_format,
-                high_bit_depth.unwrap_or(false)
+                high_bit_depth.unwrap_or(false),
+                render::gpu_sharing(&state.device).is_some()
             ));
         }
         None => log::warn("no GPU renderer"),

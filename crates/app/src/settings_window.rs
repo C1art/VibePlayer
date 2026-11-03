@@ -27,6 +27,21 @@ pub fn show(
                      Applies to the next file.",
                 )
                 .changed();
+            if cfg!(windows) {
+                ui.add_enabled_ui(settings.hardware_decoding, |ui| {
+                    changed |= widgets::toggle(
+                        ui,
+                        &mut settings.gpu_frames,
+                        "Keep decoded video on the GPU",
+                    )
+                    .on_hover_text(
+                        "Shows hardware-decoded frames without copying them through system \
+                         memory: less CPU and memory use, most of all at 4K. Applies to the \
+                         next file.",
+                    )
+                    .changed();
+                });
+            }
             changed |= widgets::toggle(
                 ui,
                 &mut settings.resume_playback,

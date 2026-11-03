@@ -47,6 +47,8 @@ pub struct VibePlayerApp {
     pub(crate) open_dialog: Option<PendingDialog>,
     pub(crate) media_controls: MediaControls,
     taskbar: Taskbar,
+    /// How decoded pictures can stay on the renderer's GPU, where supported.
+    gpu_sharing: Option<media::GpuSharing>,
     pub(crate) fullscreen: bool,
     pub(crate) editor: Option<Editor>,
     /// Files sent by later launches of the app.
@@ -87,6 +89,10 @@ impl VibePlayerApp {
             open_dialog: None,
             media_controls: MediaControls::new(creation),
             taskbar: Taskbar::new(&creation.egui_ctx),
+            gpu_sharing: creation
+                .wgpu_render_state
+                .as_ref()
+                .and_then(|state| render::gpu_sharing(&state.device)),
             fullscreen: false,
             editor: None,
             instance_requests,
@@ -114,6 +120,7 @@ impl VibePlayerApp {
                 hardware,
                 high_bit_depth: self.high_bit_depth.unwrap_or(false),
                 deinterlace: true,
+                gpu: self.gpu_sharing.filter(|_| self.settings.gpu_frames),
             },
             volume: audio::Volume::from_percent(i32::from(self.settings.volume)),
             muted: self.settings.muted,

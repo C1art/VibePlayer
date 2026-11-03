@@ -59,7 +59,21 @@ impl Frame {
         self.ptr.as_ptr()
     }
 
-    fn raw(&self) -> &sys::AVFrame {
+    /// A frame without picture data, with `source`'s size, timestamps, color and side data.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn properties_of(source: &Frame) -> Result<Frame, MediaError> {
+        let mut frame = Frame::new()?;
+        // SAFETY: both frames are valid; this copies metadata and side data, no picture.
+        let code = unsafe { sys::av_frame_copy_props(frame.ptr.as_ptr(), source.ptr.as_ptr()) };
+        check(code, "av_frame_copy_props")?;
+        // SAFETY: `&mut frame` is the only reference to the new frame.
+        let raw = unsafe { frame.ptr.as_mut() };
+        raw.width = source.raw().width;
+        raw.height = source.raw().height;
+        Ok(frame)
+    }
+
+    pub(super) fn raw(&self) -> &sys::AVFrame {
         // SAFETY: the pointer is valid and uniquely owned for the frame's lifetime.
         unsafe { self.ptr.as_ref() }
     }

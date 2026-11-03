@@ -11,6 +11,8 @@ pub struct Settings {
     pub volume: u8,
     pub muted: bool,
     pub hardware_decoding: bool,
+    /// Show hardware-decoded pictures straight from the GPU, without a copy through memory.
+    pub gpu_frames: bool,
     pub resume_playback: bool,
     /// Seconds jumped by the arrow keys.
     pub seek_step_seconds: u32,
@@ -38,6 +40,7 @@ impl Default for Settings {
             volume: 80,
             muted: false,
             hardware_decoding: true,
+            gpu_frames: true,
             resume_playback: true,
             seek_step_seconds: 5,
             updates: UpdatePreferences::default(),

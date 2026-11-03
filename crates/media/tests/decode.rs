@@ -19,6 +19,7 @@ const SOFTWARE: VideoOptions = VideoOptions {
     hardware: HardwareDecoding::Off,
     high_bit_depth: true,
     deinterlace: true,
+    gpu: None,
 };
 
 fn decode_video(name: &str, options: VideoOptions) -> Vec<VideoFrame> {

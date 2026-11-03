@@ -2,6 +2,8 @@
 
 mod codec;
 mod color;
+#[cfg(windows)]
+mod d3d11;
 mod dict;
 mod filter;
 mod frame;
@@ -19,6 +21,8 @@ use ffmpeg_sys_next as sys;
 use crate::MediaError;
 
 pub use codec::{CodecContext, HwDevice, Received};
+#[cfg(windows)]
+pub use d3d11::{SurfacePool, adapter_index};
 pub use filter::{FilterGraph, FilterMedia};
 pub use frame::{Frame, MasteringLuminance};
 pub use input::{CodecParams, Discard, InputContext, StreamRef};

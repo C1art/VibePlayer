@@ -50,6 +50,7 @@ pub(crate) fn options(autoplay: bool) -> PlayerOptions {
             hardware: hardware(),
             high_bit_depth: true,
             deinterlace: true,
+            gpu: None,
         },
         volume: audio::Volume::from_percent(0),
         muted: true,

@@ -60,6 +60,7 @@ impl SmartHead {
                 hardware: HardwareDecoding::Off,
                 high_bit_depth: true,
                 deinterlace: false,
+                gpu: None,
             },
         )?;
         let view = params.view();

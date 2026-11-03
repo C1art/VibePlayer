@@ -24,6 +24,7 @@ fn playback_speed() {
             hardware: hardware(),
             high_bit_depth: true,
             deinterlace: true,
+            gpu: None,
         };
         let Ok(mut decoder) = VideoDecoder::new(demuxer.stream_params(stream).unwrap(), options)
         else {

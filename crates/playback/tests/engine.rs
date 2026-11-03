@@ -20,6 +20,7 @@ fn options(autoplay: bool) -> PlayerOptions {
             hardware: HardwareDecoding::Off,
             high_bit_depth: true,
             deinterlace: true,
+            gpu: None,
         },
         volume: audio::Volume::default(),
         muted: true,

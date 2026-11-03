@@ -26,7 +26,7 @@ pub fn upload(render_state: &RenderState, frame: &VideoFrame) {
 pub fn clear(render_state: &RenderState) {
     let mut egui_renderer = render_state.renderer.write();
     if let Some(renderer) = egui_renderer.callback_resources.get_mut::<VideoRenderer>() {
-        renderer.clear();
+        renderer.clear(&render_state.queue);
     }
 }
 
