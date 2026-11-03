@@ -539,6 +539,7 @@ impl VibePlayerApp {
                 muted: session.player.is_muted(),
                 speed: session.player.speed(),
                 fullscreen: self.fullscreen,
+                seek_step_seconds: self.settings.seek_step_seconds,
                 info: &opened.info,
                 audio_stream: opened.audio,
                 subtitle_stream: opened.subtitle,

@@ -24,6 +24,8 @@ pub struct ControlsState<'a> {
     pub muted: bool,
     pub speed: Speed,
     pub fullscreen: bool,
+    /// The skip buttons' step, the same as the arrow keys'.
+    pub seek_step_seconds: u32,
     pub info: &'a MediaInfo,
     pub audio_stream: Option<StreamIndex>,
     pub subtitle_stream: Option<StreamIndex>,
@@ -85,11 +87,18 @@ pub fn show(
         if icon_button(ui, play_icon, 40.0, "Play / pause (Space)").clicked() {
             actions.push(Action::TogglePlay);
         }
-        if icon_button(ui, Icon::SeekBack, 36.0, "Back 10 s (J)").clicked() {
-            actions.push(Action::SeekBy { seconds: -10 });
+        let step = state.seek_step_seconds;
+        let back = format!("Back {step} s (←)");
+        if icon_button(ui, Icon::SeekBack(step), 36.0, &back).clicked() {
+            actions.push(Action::SeekBy {
+                seconds: -i64::from(step),
+            });
         }
-        if icon_button(ui, Icon::SeekForward, 36.0, "Forward 10 s (L)").clicked() {
-            actions.push(Action::SeekBy { seconds: 10 });
+        let forward = format!("Forward {step} s (→)");
+        if icon_button(ui, Icon::SeekForward(step), 36.0, &forward).clicked() {
+            actions.push(Action::SeekBy {
+                seconds: i64::from(step),
+            });
         }
         ui.add_space(6.0);
         let volume_icon = if state.muted || state.volume.percent() == 0 {
