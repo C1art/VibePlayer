@@ -1,4 +1,4 @@
-# Windows CI: lint, test and build the installer on every push and pull request.
+# Windows CI: lint, test and build the installer
 # A push to main whose Cargo.toml version has no release yet publishes one: the
 # vX.Y.Z tag and release are created here, so nobody has to push tags.
 name: Windows
