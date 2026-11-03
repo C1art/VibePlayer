@@ -347,12 +347,13 @@ impl AudioDecoder {
         );
         let mut description = String::new();
         if let Some((start, end)) = self.effects.trim {
-            // In the source's timebase, before anything restamps the samples.
+            // atrim counts in samples at the input rate, before anything restamps them.
+            let samples = Timebase::new(1, i64::from((*rate).max(1))).unwrap_or(Timebase::MICROS);
             let _ = write!(
                 description,
                 "atrim=start_pts={}:end_pts={},",
-                start.rescale(Timebase::MICROS, timebase).0,
-                end.rescale(Timebase::MICROS, timebase).0
+                start.rescale(Timebase::MICROS, samples).0,
+                end.rescale(Timebase::MICROS, samples).0
             );
         }
         description.push_str(&self.effects.speed.atempo_chain());

@@ -115,6 +115,10 @@ impl AudioControl {
         self.format
     }
 
+    pub fn is_paused(&self) -> bool {
+        self.shared.paused.load(Ordering::Acquire)
+    }
+
     pub fn set_paused(&self, paused: bool) {
         self.shared.paused.store(paused, Ordering::Release);
     }

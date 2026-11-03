@@ -30,10 +30,12 @@ impl SubtitleList {
         let started = self
             .events
             .partition_point(|subtitle| subtitle.start <= position);
+        // A clear event wipes the screen: nothing from before it shows again.
         let visible = (0..started).rev().find(|&index| {
             let subtitle = &self.events[index];
             let next_start = self.events.get(index + 1).map(|next| next.start);
-            subtitle.end.or(next_start).is_none_or(|end| position < end)
+            subtitle.content == SubtitleContent::Clear
+                || subtitle.end.or(next_start).is_none_or(|end| position < end)
         })?;
         let subtitle = &self.events[visible];
         (subtitle.content != SubtitleContent::Clear).then_some(subtitle)
@@ -64,6 +66,18 @@ mod tests {
         assert_eq!(shown(13).as_deref(), Some("short"));
         assert_eq!(shown(15).as_deref(), Some("long"));
         assert_eq!(shown(20), None);
+    }
+
+    #[test]
+    fn a_clear_event_hides_earlier_ones_for_good() {
+        let mut list = SubtitleList::default();
+        list.add(text(10, Some(20), "long"));
+        list.add(Subtitle {
+            start: Ticks(12),
+            end: Some(Ticks(13)),
+            content: SubtitleContent::Clear,
+        });
+        assert!(list.active(Ticks(15)).is_none());
     }
 
     #[test]

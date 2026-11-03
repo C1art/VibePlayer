@@ -60,6 +60,17 @@ ff -f lavfi -i "$video:duration=2" -i cover.png -map 0 -map 1 \
   cover_art.mp4
 rm cover.png
 
+# The general fixture in MPEG-TS, whose demuxer seeks by decode time.
+ff -i h264_bframes.mp4 -c copy -f mpegts h264_bframes.ts
+
+# Audio that ends three seconds in, while the video goes on to twenty.
+ff -f lavfi -i "testsrc2=size=160x90:rate=25:duration=20" -f lavfi -i "$tone:duration=3" \
+  -c:v libx264 -preset veryfast -crf 36 -pix_fmt yuv420p -g 50 -c:a aac -b:a 48k short_audio.mp4
+
+# Audio that only starts four seconds in.
+ff -f lavfi -i "testsrc2=size=160x90:rate=25:duration=8" -itsoffset 4 -f lavfi -i "$tone:duration=4" \
+  -map 0 -map 1 -c:v libx264 -preset veryfast -crf 36 -pix_fmt yuv420p -g 50 -c:a aac -b:a 48k late_audio.mp4
+
 # Truncated: the general fixture cut off partway through its media data.
 head -c 40000 h264_bframes.mp4 > truncated.mp4
 

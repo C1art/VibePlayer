@@ -54,6 +54,8 @@ pub struct VideoDecoder {
     last_output: Option<Ticks>,
     /// After a fallback replays the GOP: frames up to here were given out already.
     skip_through: Option<Ticks>,
+    /// The end of the stream was sent, so a decoder taking over must be drained too.
+    end_sent: bool,
     #[cfg(windows)]
     sharing: shared::Sharing,
 }
@@ -79,6 +81,7 @@ impl VideoDecoder {
             #[cfg(windows)]
             sharing: shared::Sharing::default(),
             last_output: None,
+            end_sent: false,
             skip_through: None,
         })
     }
@@ -98,6 +101,9 @@ impl VideoDecoder {
         let hardware = self.codec.is_hardware();
         match self.codec.send_packet(packet) {
             Ok(accepted) => {
+                if accepted && packet.is_none() {
+                    self.end_sent = true;
+                }
                 if accepted
                     && hardware
                     && let Some(packet) = packet
@@ -152,7 +158,7 @@ impl VideoDecoder {
                     }
                     if self.filter_decoded().is_err() {
                         if self.codec.is_hardware() {
-                            self.fall_back_to_software(false)?;
+                            self.fall_back_to_software(self.end_sent)?;
                         } else {
                             self.skipped += 1;
                             self.filter = None;
@@ -169,7 +175,7 @@ impl VideoDecoder {
                         filter.graph.push(None)?;
                     }
                 }
-                Err(_) if self.codec.is_hardware() => self.fall_back_to_software(false)?,
+                Err(_) if self.codec.is_hardware() => self.fall_back_to_software(self.end_sent)?,
                 Err(_) => self.skipped += 1,
             }
         }
@@ -184,6 +190,7 @@ impl VideoDecoder {
         self.replay.clear();
         self.last_output = None;
         self.skip_through = None;
+        self.end_sent = false;
     }
 
     /// Switches to software decoding and feeds it the current GOP again from its keyframe, so
@@ -215,7 +222,12 @@ impl VideoDecoder {
                 Ok(true) => return,
                 Ok(false) => match self.codec.receive_frame(&mut self.decoded) {
                     Ok(Received::Output) => {
-                        if self.filter_decoded().is_err() {
+                        // Pictures already shown are dropped here rather than piling up in
+                        // the filter: a whole GOP of them can be gigabytes at 4K.
+                        let shown = self.decoded.filtered_pts().is_some_and(|pts| {
+                            self.skip_through.is_some_and(|through| pts <= through)
+                        });
+                        if !shown && self.filter_decoded().is_err() {
                             self.skipped += 1;
                             self.filter = None;
                         }

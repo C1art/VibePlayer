@@ -14,6 +14,10 @@ use crate::{AnchorPair, AudioAnchor, Generation};
 const QUEUE_AHEAD_MICROS: i64 = 200_000;
 /// How often to try reopening a lost output device.
 const DEVICE_RETRY: Duration = Duration::from_secs(1);
+/// Audio starting later than this after its seek target gets silence in front of it.
+const FILL_AFTER: Ticks = Ticks(50_000);
+/// Longer silences than this aren't queued; the clock goes by the system then.
+const FILL_AT_MOST: Ticks = Ticks(30_000_000);
 /// A timestamp jump bigger than this starts a new anchor. Small, so a few dropped packets
 /// don't add up to drift; well above the rounding of container timestamps.
 const DISCONTINUITY_MICROS: i64 = 10_000;
@@ -57,6 +61,9 @@ struct Sink {
     shared: Arc<Shared>,
     generation: Generation,
     exact_target: Option<Ticks>,
+    /// Where audio should begin after opening or a seek; silence fills up to a later first
+    /// sample, so audio that starts late doesn't play early.
+    fill_from: Option<Ticks>,
     anchored: Option<Anchored>,
     /// The anchor before the current one, for samples still queued when it was replaced.
     previous_anchor: Option<AudioAnchor>,
@@ -89,6 +96,7 @@ fn run(setup: Setup) {
             shared: setup.shared,
             generation: Generation::default(),
             exact_target: None,
+            fill_from: Some(Ticks::ZERO),
             anchored: None,
             previous_anchor: None,
         },
@@ -108,10 +116,12 @@ fn run(setup: Setup) {
             }
             PacketMessage::Flush {
                 generation,
+                target,
                 exact_target,
             } => {
                 sink.generation = generation;
                 sink.exact_target = exact_target;
+                sink.fill_from = Some(target);
                 sink.control.clear();
                 sink.anchored = None;
                 sink.previous_anchor = None;
@@ -221,6 +231,24 @@ impl Sink {
             self.wait_out(self.control.frames_to_micros(frames));
             return true;
         }
+        if let Some(from) = self.fill_from.take() {
+            let late = pts - from;
+            if late > FILL_AFTER && late < FILL_AT_MOST {
+                let silence =
+                    vec![0.0; frames_for(rate, speed.media_to_wall(late)) as usize * channels];
+                if !self.queue(&silence, from, speed) {
+                    return false;
+                }
+            }
+        }
+        self.queue(samples, pts, speed)
+    }
+
+    /// Queues samples that start at `pts`, anchoring them if needed. Returns `false` if a seek
+    /// made the work stale.
+    fn queue(&mut self, samples: &[f32], pts: Ticks, speed: media::Speed) -> bool {
+        let channels = usize::from(self.control.format().channels).max(1);
+        let frames = (samples.len() / channels) as u64;
         self.anchor_if_needed(pts, speed);
         let mut remaining = samples;
         while !remaining.is_empty() {
@@ -285,11 +313,16 @@ impl Sink {
 }
 
 impl Sink {
-    /// Sleeps for `wall` microseconds, waking early for a seek.
+    /// Lets `wall` microseconds of playing time pass, as a device would: paused time doesn't
+    /// count. Wakes early for a seek.
     fn wait_out(&self, wall: Ticks) {
-        let deadline = Instant::now() + Duration::from_micros(u64::try_from(wall.0).unwrap_or(0));
-        while Instant::now() < deadline && !self.shared.is_stale(self.generation) {
-            thread::sleep(Duration::from_millis(5));
+        let mut left = Duration::from_micros(u64::try_from(wall.0).unwrap_or(0));
+        while !left.is_zero() && !self.shared.is_stale(self.generation) {
+            let step = left.min(Duration::from_millis(5));
+            thread::sleep(step);
+            if !self.control.is_paused() {
+                left -= step;
+            }
         }
     }
 }

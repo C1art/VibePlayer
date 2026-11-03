@@ -75,6 +75,10 @@ pub struct Player {
     video_failed: Option<PlaybackError>,
     /// The pending seek shows the keyframe before its target, so the clock goes there.
     keyframe_seek: bool,
+    /// When the current open or seek started waiting for its first frame and samples.
+    waiting_since: Instant,
+    /// The device's played-frame count when it last moved, to notice audio that stopped.
+    audio_progress: Option<(u64, Instant)>,
     /// Step-backs pressed while the previous one was still decoding.
     queued_steps_back: u32,
     stepping_back: bool,
@@ -131,6 +135,8 @@ impl Player {
             audio_decodable: true,
             video_failed: None,
             keyframe_seek: false,
+            audio_progress: None,
+            waiting_since: now,
             queued_steps_back: 0,
             stepping_back: false,
             stepped_forward: false,
@@ -219,9 +225,12 @@ impl Player {
         self.receive_events(now);
         self.receive_frames();
         let audio = self.audio_reading();
-        if self.waiting_for_media && self.media_ready(audio.is_some()) {
+        if self.waiting_for_media && self.media_ready(audio.is_some(), now) {
             self.media_arrived(now);
         }
+        // Audio that has stopped flowing can't lead: the clock would stop, video would back up
+        // and the reader, blocked on it, would never read the audio that could restart it.
+        let audio = audio.filter(|_| !self.audio_stalled(now));
         let position = self.clock.tick(now, audio);
         let shown = if self.waiting_for_media || !self.playing {
             self.queue.show_first()
@@ -344,6 +353,7 @@ impl Player {
         self.audio_ended = false;
         self.ended = false;
         self.waiting_for_media = true;
+        self.waiting_since = now;
         self.keyframe_seek = mode == SeekMode::Keyframe;
         self.queued_steps_back = 0;
         self.stepping_back = false;
@@ -387,7 +397,11 @@ impl Player {
             self.queued_steps_back += 1;
             return;
         }
-        let current = self.queue.current().map_or(self.position(), |f| f.pts);
+        // During another seek the picture on screen is from before it; step from its target.
+        let current = match self.queue.current() {
+            Some(frame) if !self.waiting_for_media => frame.pts,
+            _ => self.position(),
+        };
         if current > Ticks::ZERO {
             self.seek_at(now, current - Ticks(1), SeekMode::Exact);
             self.stepping_back = true;

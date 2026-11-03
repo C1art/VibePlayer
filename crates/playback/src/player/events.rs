@@ -6,6 +6,11 @@ use audio::AudioControl;
 use cut::Ticks;
 
 use super::{FRAMES_AHEAD, LoadState, Player, SeekMode};
+
+/// How long a seek waits for audio once its picture is ready.
+const AUDIO_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+/// How long the device may play nothing before the clock stops following it.
+const AUDIO_STALL: std::time::Duration = std::time::Duration::from_millis(300);
 use crate::messages::{Event, Opened};
 use crate::{AudioReading, PlaybackError};
 
@@ -97,7 +102,30 @@ impl Player {
         })
     }
 
-    pub(super) fn media_ready(&self, audio_anchored: bool) -> bool {
+    /// Whether audio has stopped reaching the device while playing: nothing queued (a gap in
+    /// the file, or audio that ended before the video), or no progress for a while.
+    pub(super) fn audio_stalled(&mut self, now: Instant) -> bool {
+        let Some(control) = &self.audio else {
+            return false;
+        };
+        if !self.playing || self.waiting_for_media {
+            self.audio_progress = None;
+            return false;
+        }
+        if control.queued_frames() == 0 {
+            return true;
+        }
+        let played = control.played_frames();
+        match self.audio_progress {
+            Some((last, since)) if last == played => now.duration_since(since) > AUDIO_STALL,
+            _ => {
+                self.audio_progress = Some((played, now));
+                false
+            }
+        }
+    }
+
+    pub(super) fn media_ready(&self, audio_anchored: bool, now: Instant) -> bool {
         if self.opened().is_none() {
             return false;
         }
@@ -115,7 +143,11 @@ impl Player {
             || self.audio_ended
             || device_lost
             || (self.audio.is_none() && self.audio_error.is_none() && !self.has_video());
-        video_ready && (audio_ready || !self.playing)
+        // Past the end of a track, or in a gap, no audio comes; the reader may even be held up
+        // by the video it has read. Start on the system clock rather than wait for good.
+        let gave_up_on_audio =
+            video_ready && self.has_video() && now.duration_since(self.waiting_since) > AUDIO_WAIT;
+        video_ready && (audio_ready || gave_up_on_audio || !self.playing)
     }
 
     pub(super) fn detect_end(&mut self, now: Instant) {

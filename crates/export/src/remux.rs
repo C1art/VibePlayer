@@ -178,6 +178,9 @@ pub(crate) fn remux(
     lead_in::write_cues_on_screen(source, plan, &subtitles, &mut muxer)?;
     let decode_from = plan.reencode.map_or(plan.start, |head| head.decode_from);
     demuxer.seek_stream(plan.stream, decode_from)?;
+    // The seek can land on an earlier keyframe (formats that seek by decode time); everything
+    // of the primary stream before the planned one is left out.
+    let mut reached_start = false;
 
     let mut packet = Packet::new()?;
     let mut finished = vec![false; outputs.len()];
@@ -210,6 +213,12 @@ pub(crate) fn remux(
                     && plan.is_past_end(dts.unwrap_or(pts), timebase)
                 {
                     finished[input_index.0] = true;
+                }
+                if input_index == plan.stream && !reached_start {
+                    if !(packet.is_keyframe() && pts >= decode_from) {
+                        continue;
+                    }
+                    reached_start = true;
                 }
                 let keep = if input_index == plan.stream {
                     if let Some(fraction) = fraction_done(plan, pts) {
@@ -337,12 +346,18 @@ impl Reencode {
                 if frame_end <= start || pts >= end {
                     continue;
                 }
-                let at = *self.next_sample.get_or_insert_with(|| {
-                    (pts - start)
-                        .max(Ticks::ZERO)
-                        .rescale(Timebase::MICROS, rate_timebase)
-                        .0
-                });
+                let placed = (pts - start)
+                    .max(Ticks::ZERO)
+                    .rescale(Timebase::MICROS, rate_timebase)
+                    .0;
+                // Back to back, unless the source has a real gap here (over 20 ms), which
+                // must stay or everything after it would play early.
+                let gap = self.sample_rate / 50;
+                let at = match self.next_sample {
+                    Some(next) if placed > next + gap => placed,
+                    Some(next) => next,
+                    None => placed,
+                };
                 frame.set_pts(Ticks(at));
                 self.next_sample = Some(at + samples);
                 while !self.encoder.send(Some(&frame))? {

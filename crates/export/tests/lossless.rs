@@ -92,6 +92,18 @@ fn copied_video_packets_are_byte_identical_to_the_source() {
 
 #[test]
 #[ignore]
+fn transport_streams_with_b_frames_start_on_the_keyframe() {
+    // MPEG-TS seeks by decode time, which for a keyframe comes before its presentation time.
+    let source = fixture("h264_bframes.ts");
+    let out = output("bframes.ts");
+    let plan = plan(&source, 1.3, 2.6);
+    export(&source, &out, plan, AudioChanges::default()).unwrap();
+    let expected = video_payloads(&source, |p| plan.keeps_primary(p.pts().unwrap(), p.dts()));
+    assert_eq!(video_payloads(&out, |_| true), expected);
+}
+
+#[test]
+#[ignore]
 fn every_stream_survives_the_cut() {
     let source = fixture("multi_audio.mkv");
     let out = output("streams.mkv");
@@ -164,6 +176,21 @@ fn reencoded_audio_is_cut_to_the_sample() {
     let samples = decoded_audio_samples(&out);
     // Two seconds at 48 kHz; AAC can't end mid-frame, so allow the padding of one frame.
     assert!((96_000..96_000 + 1_024).contains(&samples), "{samples}");
+}
+
+#[test]
+#[ignore]
+fn reencoded_audio_in_matroska_keeps_its_length() {
+    // Matroska's millisecond timebase differs from the sample rate, unlike MP4's audio.
+    let source = fixture("multi_audio.mkv");
+    let out = output("trimmed_audio.mkv");
+    let changes = AudioChanges {
+        gain: Decibels(-30),
+        ..AudioChanges::default()
+    };
+    export(&source, &out, plan(&source, 0.5, 3.0), changes).unwrap();
+    let samples = decoded_audio_samples(&out);
+    assert!((143_000..146_000).contains(&samples), "{samples}");
 }
 
 fn decoded_audio_samples(path: &Path) -> u64 {

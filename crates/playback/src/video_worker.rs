@@ -10,7 +10,7 @@ use crate::Generation;
 use crate::messages::{DecodedVideo, Event, PacketMessage, Shared};
 
 /// How long without packets before an exact seek settles for the frame it holds.
-const STALL: Duration = Duration::from_millis(150);
+const STALL: Duration = Duration::from_millis(400);
 
 pub(crate) struct Setup {
     pub params: StreamParams,
@@ -91,6 +91,7 @@ fn run(setup: Setup) {
             PacketMessage::Flush {
                 generation,
                 exact_target,
+                ..
             } => {
                 worker.generation = generation;
                 worker.decoder.flush();

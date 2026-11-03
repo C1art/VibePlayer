@@ -13,6 +13,8 @@ pub(crate) enum PacketMessage {
     /// Drop buffered state; with `exact_target`, skip output before it.
     Flush {
         generation: Generation,
+        /// Where the seek went, in microseconds from the start of the file.
+        target: Ticks,
         exact_target: Option<Ticks>,
     },
     End(Generation),
