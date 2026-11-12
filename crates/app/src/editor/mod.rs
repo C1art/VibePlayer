@@ -226,8 +226,7 @@ impl Editor {
 
     /// Lets the player be heard as the export will be: with the gain and EQ, or silent.
     pub fn preview_audio(&self, player: &mut playback::Player) {
-        player.set_audio_edits(self.gain, self.equalizer);
-        player.set_silenced(self.audio_tracks == TrackKeep::Remove);
+        player.set_audio_edits(self.audio_changes());
     }
 
     fn request(&self) -> TrimRequest {

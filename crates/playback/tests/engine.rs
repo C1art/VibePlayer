@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use cut::Ticks;
 use media::{HardwareDecoding, Speed, VideoOptions};
-use playback::{LoadState, Player, PlayerOptions, SeekMode};
+use playback::{AudioSelection, LoadState, Player, PlayerOptions, SeekMode};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -68,6 +68,31 @@ fn plays_a_file_to_the_end_in_real_time() {
     assert!((3.5..4.5).contains(&elapsed), "took {elapsed}s");
     assert!(shown > 80, "only {shown} frames shown");
     assert!(player.position() >= Ticks(3_900_000));
+}
+
+#[test]
+#[ignore]
+fn every_audio_track_plays_mixed_to_the_end_in_real_time() {
+    let mut player = Player::open(fixture("multi_audio.mkv"), options(true), Instant::now());
+    let started = started_moving(&mut player);
+    assert_eq!(
+        player.opened().and_then(|o| o.audio),
+        Some(AudioSelection::All)
+    );
+    run_until(&mut player, Duration::from_secs(10), Player::has_ended);
+    let elapsed = started.elapsed().as_secs_f64();
+    assert!((3.5..4.6).contains(&elapsed), "took {elapsed}s");
+}
+
+#[test]
+#[ignore]
+fn one_audio_track_can_be_picked_while_playing() {
+    let mut player = Player::open(fixture("multi_audio.mkv"), options(true), Instant::now());
+    started_moving(&mut player);
+    let second = AudioSelection::Track(cut::StreamIndex(2));
+    player.select_audio(second);
+    assert_eq!(player.opened().and_then(|o| o.audio), Some(second));
+    run_until(&mut player, Duration::from_secs(10), Player::has_ended);
 }
 
 #[test]

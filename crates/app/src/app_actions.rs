@@ -3,7 +3,7 @@ use std::time::Instant;
 use cut::Ticks;
 use eframe::egui;
 use media::StreamKind;
-use playback::SeekMode;
+use playback::{AudioSelection, SeekMode};
 
 use crate::actions::{self, Action};
 use crate::app::VibePlayerApp;
@@ -140,19 +140,18 @@ impl VibePlayerApp {
                 self.set_speed(speed);
             }
             Action::SetSpeed(speed) => self.set_speed(speed),
-            Action::SelectAudio(stream) => player.select_audio(stream),
+            Action::SelectAudio(selection) => player.select_audio(selection),
             Action::SelectSubtitle(stream) => {
                 player.select_subtitle(stream);
                 // Image cues are cached by start time, which another track can share.
                 self.subtitles = SubtitleOverlay::default();
             }
             Action::CycleAudio => {
-                let current = player.opened().and_then(|o| o.audio);
-                if let Some(next) = self.cycle_stream(StreamKind::Audio, current, false)
+                if let Some(next) = self.next_audio()
                     && let Some(session) = &mut self.session
                 {
                     session.player.select_audio(next);
-                    self.osd.show(stream_osd("Audio", session, next));
+                    self.osd.show(audio_osd(session, next));
                 }
             }
             Action::CycleSubtitles => {
@@ -187,6 +186,18 @@ impl VibePlayerApp {
             self.osd.show(format!("Speed {}×", format_speed(speed)));
         }
     }
+}
+
+fn audio_osd(session: &crate::session::Session, selection: AudioSelection) -> String {
+    let label = match selection {
+        AudioSelection::All => "All tracks".to_owned(),
+        AudioSelection::Track(index) => session
+            .player
+            .opened()
+            .and_then(|opened| opened.info.stream(index))
+            .map_or_else(|| "Off".to_owned(), crate::controls::track_label),
+    };
+    format!("Audio: {label}")
 }
 
 fn stream_osd(

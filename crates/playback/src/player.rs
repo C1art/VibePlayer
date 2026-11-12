@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 use audio::{AudioControl, Volume};
 use crossbeam::channel::{self, Receiver, Sender};
 use cut::{StreamIndex, Ticks};
-use media::{AudioEffects, Decibels, Equalizer, Speed, Subtitle, VideoFrame, VideoOptions};
+use media::{AudioEdits, Speed, Subtitle, VideoFrame, VideoOptions};
 
-use crate::messages::{Command, DecodedVideo, Event, Opened, Shared};
+use crate::messages::{AudioSelection, Command, DecodedVideo, Event, Opened, Shared};
 use crate::reader::{self, ReaderSetup};
 use crate::subtitle_list::SubtitleList;
 use crate::{Clock, FrameQueue, Generation, PlaybackError, Shown};
@@ -87,9 +87,6 @@ pub struct Player {
     hardware_decoding: Option<bool>,
     volume: Volume,
     muted: bool,
-    /// Silenced apart from the user's mute, e.g. to preview a clip without its audio.
-    silenced: bool,
-    effects: AudioEffects,
     subtitles: SubtitleList,
     pending_start: Option<Ticks>,
     dropped_frames: u64,
@@ -98,11 +95,7 @@ pub struct Player {
 impl Player {
     /// Starts opening `path` in the background; check [`Player::state`] for the result.
     pub fn open(path: PathBuf, options: PlayerOptions, now: Instant) -> Player {
-        let effects = AudioEffects {
-            speed: options.speed,
-            ..AudioEffects::default()
-        };
-        let shared = Arc::new(Shared::new(effects));
+        let shared = Arc::new(Shared::new(options.speed));
         let (command_sender, command_receiver) = channel::unbounded();
         let (event_sender, event_receiver) = channel::unbounded();
         let (frame_sender, frame_receiver) = channel::bounded(FRAMES_AHEAD);
@@ -145,8 +138,6 @@ impl Player {
             hardware_decoding: None,
             volume: options.volume,
             muted: options.muted,
-            silenced: false,
-            effects,
             subtitles: SubtitleList::default(),
             pending_start: options.start_at.filter(|t| t.0 > 0),
             dropped_frames: 0,
@@ -217,10 +208,6 @@ impl Player {
     /// Why audio isn't playing, if the output device couldn't be used.
     pub fn audio_error(&self) -> Option<&PlaybackError> {
         self.audio_error.as_ref()
-    }
-
-    pub fn equalizer(&self) -> Equalizer {
-        self.effects.equalizer
     }
 
     /// Call once per UI frame: takes in worker results and picks the frame to show.
@@ -413,15 +400,12 @@ impl Player {
 
     pub fn set_speed(&mut self, speed: Speed) {
         self.clock.set_speed(Instant::now(), speed);
-        self.effects.speed = speed;
-        self.shared.audio_effects.store(self.effects);
+        self.shared.speed.store(speed);
     }
 
-    /// Live EQ and gain for the editor preview.
-    pub fn set_audio_edits(&mut self, gain: Decibels, equalizer: Equalizer) {
-        self.effects.gain = gain;
-        self.effects.equalizer = equalizer;
-        self.shared.audio_effects.store(self.effects);
+    /// Live per-track gain, EQ and removal for the editor preview.
+    pub fn set_audio_edits(&mut self, edits: AudioEdits) {
+        self.shared.set_audio_edits(edits);
     }
 
     pub fn set_volume(&mut self, volume: Volume) {
@@ -434,24 +418,20 @@ impl Player {
         self.apply_volume();
     }
 
-    /// Plays silence without touching the user's mute; the audio clock keeps running.
-    pub fn set_silenced(&mut self, silenced: bool) {
-        self.silenced = silenced;
-        self.apply_volume();
-    }
-
     fn apply_volume(&self) {
         if let Some(audio) = &self.audio {
-            audio.set_volume(self.volume, self.muted || self.silenced);
+            audio.set_volume(self.volume, self.muted);
         }
     }
 
-    pub fn select_audio(&mut self, stream: Option<StreamIndex>) {
-        if let LoadState::Ready(opened) = &mut self.state {
-            opened.audio = stream;
+    /// Plays every audio track mixed together, or just one. Ignored for files without audio.
+    pub fn select_audio(&mut self, selection: AudioSelection) {
+        match &mut self.state {
+            LoadState::Ready(opened) if opened.audio.is_some() => opened.audio = Some(selection),
+            _ => return,
         }
         self.audio_ended = false;
-        let _ = self.commands.send(Command::SelectAudio(stream));
+        let _ = self.commands.send(Command::SelectAudio(selection));
         self.seek(self.position(), SeekMode::Exact);
     }
 

@@ -3,7 +3,7 @@ use std::rc::Rc;
 use cut::{ClockPrecision, ClockTime, StreamIndex, Ticks, Timebase};
 use eframe::egui::{self, Color32, Rect, TextureHandle, pos2, vec2};
 use media::{MediaInfo, Speed, StreamKind};
-use playback::SeekMode;
+use playback::{AudioSelection, SeekMode};
 
 use crate::actions::{Action, SPEEDS};
 use crate::chapters::ChapterMark;
@@ -29,7 +29,7 @@ pub struct ControlsState<'a> {
     /// The skip buttons' step, the same as the arrow keys'.
     pub seek_step_seconds: u32,
     pub info: &'a MediaInfo,
-    pub audio_stream: Option<StreamIndex>,
+    pub audio: Option<AudioSelection>,
     pub subtitle_stream: Option<StreamIndex>,
     pub highlight: Option<Range>,
     pub chapters: Rc<[ChapterMark]>,
@@ -207,17 +207,29 @@ fn tracks_menu(ui: &mut egui::Ui, state: &ControlsState<'_>, actions: &mut Vec<A
     let response = icon_button(ui, Icon::Subtitles, 34.0, "Audio and subtitles (A / S)");
     egui::Popup::menu(&response).show(|ui| {
         ui.set_min_width(220.0);
-        if !audio.is_empty() {
+        if audio.len() > 1 {
             crate::widgets::section_title(ui, "Audio");
+            let all = Some(AudioSelection::All);
+            if ui
+                .selectable_label(state.audio == all, "All tracks")
+                .clicked()
+            {
+                actions.push(Action::SelectAudio(AudioSelection::All));
+            }
             for stream in &audio {
-                let selected = state.audio_stream == Some(stream.index);
-                if ui.selectable_label(selected, track_label(stream)).clicked() {
-                    actions.push(Action::SelectAudio(Some(stream.index)));
+                let track = AudioSelection::Track(stream.index);
+                if ui
+                    .selectable_label(state.audio == Some(track), track_label(stream))
+                    .clicked()
+                {
+                    actions.push(Action::SelectAudio(track));
                 }
             }
         }
         if !subtitles.is_empty() {
-            ui.separator();
+            if audio.len() > 1 {
+                ui.separator();
+            }
             crate::widgets::section_title(ui, "Subtitles");
             if ui
                 .selectable_label(state.subtitle_stream.is_none(), "Off")

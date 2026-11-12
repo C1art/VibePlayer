@@ -32,13 +32,11 @@ impl VibePlayerApp {
             return;
         };
         let saved = self.history.cut_session(&opened.info.path);
-        match Editor::new(
-            &opened.info,
-            opened.audio,
-            saved,
-            &self.settings.editor,
-            ctx,
-        ) {
+        // The waveform shows the track being heard, or the first of a mix.
+        let heard = opened
+            .audio
+            .and_then(|selection| selection.streams(&opened.info).first().copied());
+        match Editor::new(&opened.info, heard, saved, &self.settings.editor, ctx) {
             Some(editor) => {
                 editor.preview_audio(&mut session.player);
                 self.editor = Some(editor);
@@ -64,10 +62,7 @@ impl VibePlayerApp {
             self.save_history();
         }
         if let Some(session) = &mut self.session {
-            session
-                .player
-                .set_audio_edits(media::Decibels(0), media::Equalizer::default());
-            session.player.set_silenced(false);
+            session.player.set_audio_edits(media::AudioEdits::default());
         }
     }
 

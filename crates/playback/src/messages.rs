@@ -1,9 +1,10 @@
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use audio::AudioControl;
 use crossbeam::atomic::AtomicCell;
 use cut::{StreamIndex, Ticks};
-use media::{AudioEffects, MediaInfo, Packet, StreamParams, Subtitle, VideoFrame};
+use media::{AudioEdits, MediaInfo, Packet, Speed, StreamKind, StreamParams, Subtitle, VideoFrame};
 
 use crate::{AnchorPair, Generation, PlaybackError};
 
@@ -18,8 +19,8 @@ pub(crate) enum PacketMessage {
         exact_target: Option<Ticks>,
     },
     End(Generation),
-    /// Switch to another stream of the same kind, or none.
-    SetStream(Option<StreamParams>),
+    /// Switch to other audio streams; empty for none.
+    SetStreams(Vec<(StreamIndex, StreamParams)>),
 }
 
 pub(crate) enum Command {
@@ -28,7 +29,7 @@ pub(crate) enum Command {
         target: Ticks,
         exact: bool,
     },
-    SelectAudio(Option<StreamIndex>),
+    SelectAudio(AudioSelection),
     SelectSubtitle(Option<StreamIndex>),
 }
 
@@ -52,12 +53,34 @@ pub(crate) enum Event {
     AudioEnded(Generation),
 }
 
+/// Which audio tracks play.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioSelection {
+    /// Every audio track, mixed together.
+    All,
+    Track(StreamIndex),
+}
+
+impl AudioSelection {
+    /// The streams this selects in `info`.
+    pub fn streams(self, info: &MediaInfo) -> Vec<StreamIndex> {
+        match self {
+            AudioSelection::All => info
+                .streams_of(StreamKind::Audio)
+                .map(|stream| stream.index)
+                .collect(),
+            AudioSelection::Track(stream) => vec![stream],
+        }
+    }
+}
+
 /// The file's description and the streams chosen for playback.
 #[derive(Clone, Debug)]
 pub struct Opened {
     pub info: MediaInfo,
     pub video: Option<StreamIndex>,
-    pub audio: Option<StreamIndex>,
+    /// `None` for a file without audio.
+    pub audio: Option<AudioSelection>,
     pub subtitle: Option<StreamIndex>,
 }
 
@@ -70,18 +93,40 @@ pub(crate) struct DecodedVideo {
 pub(crate) struct Shared {
     generation: AtomicU64,
     pub audio_anchor: AtomicCell<Option<AnchorPair>>,
-    pub audio_effects: AtomicCell<AudioEffects>,
+    pub speed: AtomicCell<Speed>,
+    /// Per-track gain, EQ and removal for the editor preview, bumped in `audio_edits_version`.
+    audio_edits: Mutex<AudioEdits>,
+    audio_edits_version: AtomicU64,
     quit: AtomicBool,
 }
 
 impl Shared {
-    pub fn new(effects: AudioEffects) -> Shared {
+    pub fn new(speed: Speed) -> Shared {
         Shared {
             generation: AtomicU64::new(0),
             audio_anchor: AtomicCell::new(None),
-            audio_effects: AtomicCell::new(effects),
+            speed: AtomicCell::new(speed),
+            audio_edits: Mutex::new(AudioEdits::default()),
+            audio_edits_version: AtomicU64::new(0),
             quit: AtomicBool::new(false),
         }
+    }
+
+    pub fn set_audio_edits(&self, edits: AudioEdits) {
+        if let Ok(mut current) = self.audio_edits.lock() {
+            *current = edits;
+        }
+        self.audio_edits_version.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// The edits, if they changed since `version`; updates `version`.
+    pub fn audio_edits_since(&self, version: &mut u64) -> Option<AudioEdits> {
+        let latest = self.audio_edits_version.load(Ordering::Acquire);
+        if latest == *version {
+            return None;
+        }
+        *version = latest;
+        self.audio_edits.lock().ok().map(|edits| edits.clone())
     }
 
     pub fn generation(&self) -> Generation {

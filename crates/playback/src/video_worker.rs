@@ -107,7 +107,7 @@ fn run(setup: Setup) {
                 let _ = setup.events.send(Event::VideoEnded(generation));
                 flow
             }
-            PacketMessage::SetStream(_) => Flow::Continue,
+            PacketMessage::SetStreams(_) => Flow::Continue,
         };
         if let Flow::Stop = flow {
             return;
