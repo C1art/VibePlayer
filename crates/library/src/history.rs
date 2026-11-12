@@ -44,14 +44,52 @@ pub struct CutSession {
     pub timebase: Timebase,
     pub start: Ticks,
     pub end: Ticks,
-    /// Tenths of a decibel.
+    /// One edit for every audio track, from before tracks were edited separately; read
+    /// through [`CutSession::track_edits`].
     #[serde(default)]
     pub gain: i16,
     #[serde(default)]
     pub equalizer: [i16; 3],
     #[serde(default)]
     pub remove_audio: bool,
+    /// The edited audio tracks; tracks not listed are left as they are.
+    #[serde(default)]
+    pub tracks: Vec<TrackSession>,
     pub saved_at: u64,
+}
+
+/// The edit to one audio track.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrackSession {
+    pub stream: usize,
+    /// Tenths of a decibel.
+    #[serde(default)]
+    pub gain: i16,
+    /// Bass, mid and treble, in tenths of a decibel.
+    #[serde(default)]
+    pub equalizer: [i16; 3],
+    #[serde(default)]
+    pub remove: bool,
+}
+
+impl CutSession {
+    /// The per-track edits; a session saved before tracks were edited separately gives its
+    /// one edit to each of `audio_streams`.
+    pub fn track_edits(&self, audio_streams: &[usize]) -> Vec<TrackSession> {
+        let legacy = self.gain != 0 || self.equalizer != [0; 3] || self.remove_audio;
+        if !self.tracks.is_empty() || !legacy {
+            return self.tracks.clone();
+        }
+        audio_streams
+            .iter()
+            .map(|&stream| TrackSession {
+                stream,
+                gain: self.gain,
+                equalizer: self.equalizer,
+                remove: self.remove_audio,
+            })
+            .collect()
+    }
 }
 
 impl Default for History {
@@ -146,6 +184,23 @@ mod tests {
     use super::*;
 
     const HOUR: Ticks = Ticks(3_600_000_000);
+
+    #[test]
+    fn a_session_from_before_per_track_edits_gives_its_edit_to_every_track() {
+        let session: CutSession = serde_json::from_str(
+            r#"{"path":"a.mkv","timebase":{"num":1,"den":1000},"start":0,"end":5,
+                "gain":-60,"equalizer":[10,0,0],"remove_audio":false,"saved_at":0}"#,
+        )
+        .unwrap();
+        let edits = session.track_edits(&[1, 2]);
+        assert_eq!(edits.len(), 2);
+        assert!(
+            edits
+                .iter()
+                .all(|t| t.gain == -60 && t.equalizer == [10, 0, 0])
+        );
+        assert_eq!(edits[1].stream, 2);
+    }
 
     #[test]
     fn recents_move_to_front_without_duplicates() {

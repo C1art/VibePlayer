@@ -1,6 +1,7 @@
 //! Safe FFmpeg wrapper: probe, demux, decode, filter, remux.
 
 mod audio;
+mod audio_edits;
 mod color;
 mod demux;
 mod encode;
@@ -19,6 +20,7 @@ mod video;
 mod video_frame;
 
 pub use audio::{AudioDecoder, AudioEffects, AudioFrame, AudioTarget, Decibels, Equalizer, Speed};
+pub use audio_edits::{AudioEdits, TrackEdit, TrackKeep};
 pub use color::{ColorInfo, ColorRange, Matrix, Primaries, Transfer};
 pub use demux::Demuxer;
 pub use encode::{VideoEncoder, smart_cut_encoder};

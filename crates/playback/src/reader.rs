@@ -8,7 +8,9 @@ use crossbeam::channel::{self, Receiver, SendTimeoutError, Sender};
 use cut::{StreamIndex, Ticks, Timebase};
 use media::{Demuxer, MediaInfo, Packet, StreamKind, SubtitleDecoder, VideoOptions};
 
-use crate::messages::{Command, DecodedVideo, Event, Opened, PacketMessage, Shared};
+use crate::messages::{
+    AudioSelection, Command, DecodedVideo, Event, Opened, PacketMessage, Shared,
+};
 use crate::{Generation, PlaybackError, audio_worker, video_worker};
 
 const VIDEO_PACKETS: usize = 96;
@@ -36,16 +38,16 @@ pub(crate) fn spawn(setup: ReaderSetup) {
     }
 }
 
-/// Where a stream's packets go.
+/// Where the packets of some streams go.
 struct Route {
-    stream: Option<StreamIndex>,
+    streams: Vec<StreamIndex>,
     sender: Option<Sender<PacketMessage>>,
 }
 
 impl Route {
     fn none() -> Route {
         Route {
-            stream: None,
+            streams: Vec::new(),
             sender: None,
         }
     }
@@ -75,7 +77,10 @@ fn run(setup: ReaderSetup) {
     };
     let info = demuxer.info();
     let video_stream = demuxer.best_stream(StreamKind::Video);
-    let audio_stream = demuxer.best_stream(StreamKind::Audio);
+    let audio = info
+        .streams_of(StreamKind::Audio)
+        .next()
+        .map(|_| AudioSelection::All);
     let subtitle_stream = info
         .streams_of(StreamKind::Subtitle)
         .find(|s| s.is_default)
@@ -99,13 +104,13 @@ fn run(setup: ReaderSetup) {
     if let Some(stream) = video_stream {
         reader.start_video(stream, setup.video_options, setup.frames);
     }
-    reader.start_audio(audio_stream);
+    reader.start_audio(audio);
     reader.select_subtitle(subtitle_stream);
     reader.apply_selection();
     let opened = Opened {
         info: reader.info.clone(),
-        video: reader.video.stream,
-        audio: reader.audio.stream,
+        video: reader.video.streams.first().copied(),
+        audio,
         subtitle: reader.subtitle.as_ref().map(|(stream, _)| *stream),
     };
     if reader.events.send(Event::Opened(Box::new(opened))).is_ok() {
@@ -139,14 +144,28 @@ impl Reader {
         };
         if video_worker::spawn(worker) {
             self.video = Route {
-                stream: Some(stream),
+                streams: vec![stream],
                 sender: Some(sender),
             };
         }
     }
 
-    fn start_audio(&mut self, stream: Option<StreamIndex>) {
-        let params = stream.and_then(|s| self.demuxer.stream_params(s).ok());
+    /// The selected audio streams that can be decoded, with their parameters.
+    fn audio_params(
+        &self,
+        selection: Option<AudioSelection>,
+    ) -> Vec<(StreamIndex, media::StreamParams)> {
+        selection
+            .map(|selection| selection.streams(&self.info))
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|stream| Some((stream, self.demuxer.stream_params(stream).ok()?)))
+            .collect()
+    }
+
+    fn start_audio(&mut self, selection: Option<AudioSelection>) {
+        let params = self.audio_params(selection);
+        let streams = params.iter().map(|(stream, _)| *stream).collect();
         let (sender, receiver) = channel::bounded(AUDIO_PACKETS);
         let worker = audio_worker::Setup {
             params,
@@ -158,17 +177,17 @@ impl Reader {
         };
         if audio_worker::spawn(worker) {
             self.audio = Route {
-                stream,
+                streams,
                 sender: Some(sender),
             };
         }
     }
 
-    fn select_audio(&mut self, stream: Option<StreamIndex>) {
-        let params = stream.and_then(|s| self.demuxer.stream_params(s).ok());
-        self.audio.stream = stream.filter(|_| params.is_some());
+    fn select_audio(&mut self, selection: AudioSelection) {
+        let params = self.audio_params(Some(selection));
+        self.audio.streams = params.iter().map(|(stream, _)| *stream).collect();
         if let Some(sender) = &self.audio.sender {
-            let _ = sender.send(PacketMessage::SetStream(params));
+            let _ = sender.send(PacketMessage::SetStreams(params));
         }
     }
 
@@ -181,14 +200,15 @@ impl Reader {
     }
 
     fn apply_selection(&mut self) {
-        let streams: Vec<StreamIndex> = [
-            self.video.stream,
-            self.audio.stream,
-            self.subtitle.as_ref().map(|(stream, _)| *stream),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
+        let subtitle = self.subtitle.as_ref().map(|(stream, _)| *stream);
+        let streams: Vec<StreamIndex> = self
+            .video
+            .streams
+            .iter()
+            .chain(&self.audio.streams)
+            .copied()
+            .chain(subtitle)
+            .collect();
         self.demuxer.select_streams(&streams);
     }
 
@@ -255,8 +275,8 @@ impl Reader {
                 target,
                 exact,
             } => self.seek(generation, target, exact),
-            Command::SelectAudio(stream) => {
-                self.select_audio(stream);
+            Command::SelectAudio(selection) => {
+                self.select_audio(selection);
                 self.apply_selection();
             }
             Command::SelectSubtitle(stream) => {
@@ -293,8 +313,9 @@ impl Reader {
     fn seek_demuxer(&mut self, absolute: Ticks) -> Result<(), media::MediaError> {
         let video = self
             .video
-            .stream
-            .and_then(|stream| Some((stream, self.demuxer.timebase(stream)?)));
+            .streams
+            .first()
+            .and_then(|&stream| Some((stream, self.demuxer.timebase(stream)?)));
         match video {
             Some((stream, timebase)) => {
                 let mut ticks = absolute.rescale(Timebase::MICROS, timebase);
@@ -330,9 +351,9 @@ impl Reader {
             }
             return;
         }
-        let route = if Some(stream) == self.video.stream {
+        let route = if self.video.streams.contains(&stream) {
             &self.video
-        } else if Some(stream) == self.audio.stream {
+        } else if self.audio.streams.contains(&stream) {
             &self.audio
         } else {
             return;

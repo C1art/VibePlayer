@@ -13,17 +13,18 @@ const BUCKETS: usize = 4_000;
 const SAMPLE_RATE: u32 = 8_000;
 const REPORT_EVERY: Duration = Duration::from_millis(250);
 
-/// The audio's loudness over time, computed in the background and filled in as it goes.
+/// Each audio track's loudness over time, computed in the background and filled in as it
+/// goes.
 pub struct Waveform {
-    updates: Receiver<Vec<f32>>,
-    peaks: Vec<f32>,
+    updates: Receiver<Vec<(StreamIndex, Vec<f32>)>>,
+    tracks: Vec<(StreamIndex, Vec<f32>)>,
     complete: bool,
 }
 
 impl Waveform {
     pub fn new(
         path: PathBuf,
-        stream: StreamIndex,
+        streams: Vec<StreamIndex>,
         duration: Ticks,
         repaint: egui::Context,
     ) -> Waveform {
@@ -31,16 +32,16 @@ impl Waveform {
         let _ = thread::Builder::new()
             .name("waveform".into())
             .spawn(move || {
-                let _ = scan(&path, stream, duration, |peaks| {
+                let _ = scan(&path, &streams, duration, |tracks| {
                     repaint.request_repaint();
-                    sender.send(peaks.to_vec()).is_ok()
+                    sender.send(tracks).is_ok()
                 });
                 drop(sender);
                 repaint.request_repaint();
             });
         Waveform {
             updates,
-            peaks: Vec::new(),
+            tracks: Vec::new(),
             complete: false,
         }
     }
@@ -50,8 +51,8 @@ impl Waveform {
         let mut changed = false;
         loop {
             match self.updates.try_recv() {
-                Ok(peaks) => {
-                    self.peaks = peaks;
+                Ok(tracks) => {
+                    self.tracks = tracks;
                     changed = true;
                 }
                 Err(TryRecvError::Empty) => return changed,
@@ -64,9 +65,24 @@ impl Waveform {
         }
     }
 
-    /// Peak amplitude (0–1) per equal slice of the file; empty until the first report.
-    pub fn peaks(&self) -> &[f32] {
-        &self.peaks
+    /// The loudest of `streams` (0–1) per equal slice of the file; empty until the first
+    /// report.
+    pub fn peaks(&self, streams: &[StreamIndex]) -> Vec<f32> {
+        let mut shown = self
+            .tracks
+            .iter()
+            .filter(|(stream, _)| streams.contains(stream))
+            .map(|(_, peaks)| peaks);
+        let Some(first) = shown.next() else {
+            return Vec::new();
+        };
+        let mut peaks = first.clone();
+        for track in shown {
+            for (peak, other) in peaks.iter_mut().zip(track) {
+                *peak = peak.max(*other);
+            }
+        }
+        peaks
     }
 
     pub fn is_complete(&self) -> bool {
@@ -74,45 +90,66 @@ impl Waveform {
     }
 }
 
-/// Decodes `stream` to mono and reports the peaks so far every quarter second, and at the end.
+/// Decodes every one of `streams` to mono in one pass and reports each one's peaks so far
+/// every quarter second, and at the end.
 fn scan(
     path: &std::path::Path,
-    stream: StreamIndex,
+    streams: &[StreamIndex],
     duration: Ticks,
-    mut report: impl FnMut(&[f32]) -> bool,
+    mut report: impl FnMut(Vec<(StreamIndex, Vec<f32>)>) -> bool,
 ) -> Result<(), media::MediaError> {
     let mut demuxer = Demuxer::open(path)?;
     let origin = demuxer.info().start_time;
-    demuxer.select_streams(&[stream]);
+    demuxer.select_streams(streams);
     let target = AudioTarget {
         sample_format: "flt".into(),
         sample_rate: SAMPLE_RATE,
         layout: "mono".into(),
         frame_size: None,
     };
-    let mut decoder = AudioDecoder::new(
-        demuxer.stream_params(stream)?,
-        target,
-        AudioEffects::default(),
-    )?;
-    let mut peaks = PeakBuckets::new(BUCKETS, duration, SAMPLE_RATE);
+    let mut tracks = Vec::new();
+    for &stream in streams {
+        // A track that can't be decoded just has no waveform.
+        let Ok(decoder) = demuxer
+            .stream_params(stream)
+            .and_then(|params| AudioDecoder::new(params, target.clone(), AudioEffects::default()))
+        else {
+            continue;
+        };
+        tracks.push((
+            stream,
+            decoder,
+            PeakBuckets::new(BUCKETS, duration, SAMPLE_RATE),
+        ));
+    }
+    let snapshot = |tracks: &[(StreamIndex, AudioDecoder, PeakBuckets)]| {
+        tracks
+            .iter()
+            .map(|(stream, _, peaks)| (*stream, peaks.values().to_vec()))
+            .collect()
+    };
     let mut packet = Packet::new()?;
     let mut last_report = Instant::now();
     loop {
         let more = demuxer.read(&mut packet)?;
-        decoder.send(more.then_some(&packet))?;
-        while let Some(frame) = decoder.receive()? {
-            if let Some(pts) = frame.pts {
-                peaks.add(pts - origin, frame.samples());
+        for (stream, decoder, peaks) in &mut tracks {
+            if more && packet.stream_index() != *stream {
+                continue;
+            }
+            decoder.send(more.then_some(&packet))?;
+            while let Some(frame) = decoder.receive()? {
+                if let Some(pts) = frame.pts {
+                    peaks.add(pts - origin, frame.samples());
+                }
             }
         }
         if !more {
-            report(peaks.values());
+            report(snapshot(&tracks));
             return Ok(());
         }
         if last_report.elapsed() >= REPORT_EVERY {
             last_report = Instant::now();
-            if !report(peaks.values()) {
+            if !report(snapshot(&tracks)) {
                 return Ok(());
             }
         }

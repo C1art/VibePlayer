@@ -8,7 +8,7 @@ use cut::{StreamIndex, Ticks};
 use eframe::egui::{self, Color32, CursorIcon, Rect, Sense};
 use library::{History, Saver, Settings, Store, log};
 use media::{HardwareDecoding, Speed, VideoOptions};
-use playback::{LoadState, PlayerOptions};
+use playback::{AudioSelection, LoadState, PlayerOptions};
 
 use crate::actions::Action;
 use crate::controls::{self, ControlsState};
@@ -549,7 +549,7 @@ impl VibePlayerApp {
                 fullscreen: self.fullscreen,
                 seek_step_seconds: self.settings.seek_step_seconds,
                 info: &opened.info,
-                audio_stream: opened.audio,
+                audio: opened.audio,
                 subtitle_stream: opened.subtitle,
                 highlight: None,
                 chapters: Rc::clone(&session.chapters),
@@ -568,6 +568,24 @@ impl VibePlayerApp {
             info_panel::show(&ctx, &mut self.info_open, &opened.info, &stats);
         }
         over
+    }
+
+    /// After all tracks mixed comes each track on its own, then all again.
+    pub(crate) fn next_audio(&self) -> Option<AudioSelection> {
+        let opened = self.session.as_ref()?.player.opened()?;
+        let choices: Vec<AudioSelection> = std::iter::once(AudioSelection::All)
+            .chain(
+                opened
+                    .info
+                    .streams_of(media::StreamKind::Audio)
+                    .map(|stream| AudioSelection::Track(stream.index)),
+            )
+            .collect();
+        if choices.len() < 3 {
+            return None;
+        }
+        let at = choices.iter().position(|c| Some(*c) == opened.audio)?;
+        Some(choices[(at + 1) % choices.len()])
     }
 
     pub(crate) fn cycle_stream(

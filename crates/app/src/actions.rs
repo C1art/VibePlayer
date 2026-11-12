@@ -42,7 +42,7 @@ pub enum Action {
     TrimEndHere,
     ShowOpenDialog,
     Open(PathBuf),
-    SelectAudio(Option<StreamIndex>),
+    SelectAudio(playback::AudioSelection),
     SelectSubtitle(Option<StreamIndex>),
     CycleAudio,
     CycleSubtitles,

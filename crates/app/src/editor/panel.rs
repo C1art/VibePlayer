@@ -2,16 +2,13 @@ use std::path::PathBuf;
 
 use cut::{ClockPrecision, ClockTime, Ticks, Timebase};
 use eframe::egui::{self, Align, Layout, Rect, RichText, pos2, vec2};
-use media::Decibels;
 use playback::SeekMode;
-
-use export::AudioTracks;
 
 use super::Editor;
 use super::timeline::Timeline;
 use crate::icons::Icon;
 use crate::theme;
-use crate::widgets::{self, Kind, badge, balance_slider, button, chip, icon_button, section_title};
+use crate::widgets::{self, Kind, badge, button, chip, icon_button, section_title};
 
 const PADDING: egui::Vec2 = vec2(22.0, 14.0);
 const CARD_GAP: f32 = 12.0;
@@ -19,7 +16,7 @@ const CLIP_WIDTH: f32 = 290.0;
 const CUT_WIDTH: f32 = 290.0;
 /// Narrower than this, the audio sliders go two to a row.
 const AUDIO_ONE_ROW_WIDTH: f32 = 470.0;
-const SLIDER_ROW_HEIGHT: f32 = 44.0;
+use super::audio_card::SLIDER_ROW_HEIGHT;
 
 /// The panel's height in a window `width` points wide: taller when narrow, so the audio
 /// sliders have room.
@@ -125,7 +122,7 @@ pub fn show(
         });
         let rest = ui.available_width();
         card(ui, rest, card_height, |ui| {
-            audio_card(ui, editor, 1 + extra_rows, &mut actions);
+            super::audio_card::show(ui, editor, 1 + extra_rows, &mut actions);
         });
     });
 
@@ -343,73 +340,6 @@ fn cut_card(ui: &mut egui::Ui, editor: &mut Editor, actions: &mut Vec<EditorActi
         editor.result = None;
         actions.push(EditorAction::PreferencesChanged);
     }
-}
-
-fn audio_card(
-    ui: &mut egui::Ui,
-    editor: &mut Editor,
-    slider_rows: usize,
-    actions: &mut Vec<EditorAction>,
-) {
-    let changes = editor.audio_changes();
-    let note = match (editor.audio_tracks, changes.reencodes()) {
-        (AudioTracks::Remove, _) => ("Removed from the clip", theme::keyframe()),
-        (AudioTracks::Keep, true) => ("Re-encoded for volume and EQ", theme::smart()),
-        (AudioTracks::Keep, false) => ("Copied untouched", theme::TEXT_DIM),
-    };
-    card_title(ui, "Audio", Some(note));
-    let mut removed = editor.audio_tracks == AudioTracks::Remove;
-    if widgets::toggle(ui, &mut removed, "Remove audio")
-        .on_hover_text("Export the clip without sound; the preview plays silently")
-        .changed()
-    {
-        editor.audio_tracks = if removed {
-            AudioTracks::Remove
-        } else {
-            AudioTracks::Keep
-        };
-        editor.result = None;
-        actions.push(EditorAction::AudioChanged);
-    }
-    ui.add_enabled_ui(!removed, |ui| {
-        if removed {
-            ui.set_opacity(0.35);
-        }
-        let per_row = 4 / slider_rows.max(1);
-        let gap = 14.0;
-        let width = ((ui.available_width() - (per_row - 1) as f32 * gap) / per_row as f32)
-            .clamp(60.0, 170.0);
-        let mut sliders = [
-            ("Volume", &mut editor.gain, 20.0),
-            ("Bass", &mut editor.equalizer.bass, 12.0),
-            ("Mid", &mut editor.equalizer.mid, 12.0),
-            ("Treble", &mut editor.equalizer.treble, 12.0),
-        ];
-        let mut changed = false;
-        for row in sliders.chunks_mut(per_row) {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                for (label, gain, limit) in row {
-                    ui.allocate_ui(vec2(width, SLIDER_ROW_HEIGHT), |ui| {
-                        let value = f32::from(gain.0) / 10.0;
-                        if let Some(new) =
-                            balance_slider(ui, label, value, *limit, |v| format!("{v:+.1} dB"))
-                        {
-                            let tenths = ((new * 2.0).round() * 5.0) as i16;
-                            if tenths != gain.0 {
-                                **gain = Decibels(tenths);
-                                changed = true;
-                            }
-                        }
-                    });
-                }
-            });
-        }
-        if changed {
-            editor.result = None;
-            actions.push(EditorAction::AudioChanged);
-        }
-    });
 }
 
 fn status(

@@ -160,7 +160,7 @@ fn export_whatever_we_can(path: &Path, out_dir: &Path) {
         source: path.to_path_buf(),
         output: output.clone(),
         plan,
-        audio: export::AudioChanges::default(),
+        audio: media::AudioEdits::default(),
     };
     let _ = export::run(&request, &AtomicBool::new(false), &|_| {});
     let _ = std::fs::remove_file(&output);

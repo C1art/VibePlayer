@@ -3,40 +3,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cut::{CutPlan, StreamIndex, Ticks, Timebase};
 use media::{
-    AudioDecoder, AudioEffects, AudioEncoder, Chapter, Decibels, Demuxer, Equalizer, Muxer, Packet,
+    AudioDecoder, AudioEdits, AudioEffects, AudioEncoder, Chapter, Demuxer, Muxer, Packet,
     StreamDetails, StreamInfo, StreamKind,
 };
 
 use crate::ExportError;
 use crate::lead_in::{self, SubtitleOutput};
 use crate::smart::SmartHead;
-
-/// What happens to the audio streams. Gain and EQ force audio, and only audio, to be
-/// re-encoded; removing it re-encodes nothing.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct AudioChanges {
-    pub gain: Decibels,
-    pub equalizer: Equalizer,
-    pub tracks: AudioTracks,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum AudioTracks {
-    #[default]
-    Keep,
-    Remove,
-}
-
-impl AudioChanges {
-    pub fn is_none(&self) -> bool {
-        self.tracks == AudioTracks::Keep && !self.reencodes()
-    }
-
-    /// Whether kept audio must be re-encoded to apply the gain or EQ.
-    pub fn reencodes(&self) -> bool {
-        self.tracks == AudioTracks::Keep && (self.gain.0 != 0 || !self.equalizer.is_flat())
-    }
-}
 
 const DEFAULT_AUDIO_BIT_RATE: u64 = 192_000;
 /// Audio packets this close outside the range are still decoded, then trimmed by sample time.
@@ -78,7 +51,7 @@ pub(crate) fn remux(
     source: &Path,
     temp: &Path,
     plan: &CutPlan,
-    audio: AudioChanges,
+    audio: &AudioEdits,
     cancel: &AtomicBool,
     progress: &dyn Fn(f32),
 ) -> Result<Remuxed, ExportError> {
@@ -92,9 +65,10 @@ pub(crate) fn remux(
             outputs.push(None);
             continue;
         };
-        let output = if stream.kind == StreamKind::Audio && audio.tracks == AudioTracks::Remove {
+        let edit = audio.get(stream.index);
+        let output = if stream.kind == StreamKind::Audio && edit.is_removed() {
             None
-        } else if stream.kind == StreamKind::Audio && audio.reencodes() {
+        } else if stream.kind == StreamKind::Audio && edit.reencodes() {
             reencoded_audio = true;
             let params = demuxer.stream_params(stream.index)?;
             let bit_rate = stream.bit_rate.unwrap_or(DEFAULT_AUDIO_BIT_RATE);
@@ -102,8 +76,8 @@ pub(crate) fn remux(
             let mut encoder = AudioEncoder::open(&params, None, bit_rate, global_header)
                 .or_else(|_| AudioEncoder::open(&params, Some("aac"), bit_rate, global_header))?;
             let effects = AudioEffects {
-                gain: audio.gain,
-                equalizer: audio.equalizer,
+                gain: edit.gain,
+                equalizer: edit.equalizer,
                 trim: Some(plan.range_in(Timebase::MICROS)),
                 ..AudioEffects::default()
             };

@@ -4,10 +4,11 @@ use std::time::{Duration, Instant};
 
 use audio::{AudioControl, AudioOutput, Volume};
 use crossbeam::channel::{Receiver, Sender};
-use cut::{SampleRate, Ticks, Timebase};
-use media::{AudioDecoder, AudioEffects, AudioFrame, AudioTarget, StreamParams};
+use cut::{SampleRate, StreamIndex, Ticks, Timebase};
+use media::{AudioDecoder, AudioEdits, AudioEffects, AudioTarget, Packet, StreamParams};
 
 use crate::messages::{Event, PacketMessage, Shared};
+use crate::mixer::Mixer;
 use crate::{AnchorPair, AudioAnchor, Generation};
 
 /// How far ahead of the device we decode. Short, so EQ and speed changes are heard quickly.
@@ -21,9 +22,13 @@ const FILL_AT_MOST: Ticks = Ticks(30_000_000);
 /// A timestamp jump bigger than this starts a new anchor. Small, so a few dropped packets
 /// don't add up to drift; well above the rounding of container timestamps.
 const DISCONTINUITY_MICROS: i64 = 10_000;
+/// How long the mix waits for a track that falls behind (or hasn't started) before playing
+/// the others without it.
+const MIX_LAG_LIMIT: Ticks = Ticks(500_000);
 
 pub(crate) struct Setup {
-    pub params: Option<StreamParams>,
+    /// The audio streams to play, mixed together.
+    pub params: Vec<(StreamIndex, StreamParams)>,
     pub volume: Volume,
     pub start_time: Ticks,
     pub packets: Receiver<PacketMessage>,
@@ -44,16 +49,25 @@ struct Anchored {
     expected_pts: Ticks,
 }
 
+/// One audio stream being decoded into the mix.
+struct Track {
+    stream: StreamIndex,
+    params: StreamParams,
+    decoder: Option<AudioDecoder>,
+}
+
 struct Worker {
     target: AudioTarget,
-    params: Option<StreamParams>,
-    decoder: Option<AudioDecoder>,
+    tracks: Vec<Track>,
+    mixer: Mixer,
+    edits: AudioEdits,
+    edits_version: u64,
     sink: Sink,
     events: Sender<Event>,
     last_device_retry: Option<Instant>,
 }
 
-/// Everything on the device side of the decoder.
+/// Everything on the device side of the mixer.
 struct Sink {
     output: AudioOutput,
     control: AudioControl,
@@ -82,13 +96,14 @@ fn run(setup: Setup) {
     let control = output.control();
     let format = output.format();
     let _ = setup.events.send(Event::AudioReady(control.clone()));
-    let target = AudioTarget::playback(format.sample_rate.0, format.channels);
     let mut worker = Worker {
-        decoder: None,
-        params: None,
+        target: AudioTarget::playback(format.sample_rate.0, format.channels),
+        tracks: Vec::new(),
+        mixer: Mixer::new(format.channels, format.sample_rate, 0),
+        edits: AudioEdits::default(),
+        edits_version: 0,
         events: setup.events.clone(),
         last_device_retry: None,
-        target,
         sink: Sink {
             control,
             output,
@@ -101,14 +116,15 @@ fn run(setup: Setup) {
             previous_anchor: None,
         },
     };
-    worker.set_stream(setup.params);
+    worker.refresh_edits();
+    worker.set_streams(setup.params);
     for message in setup.packets {
-        let sink = &mut worker.sink;
-        if sink.shared.should_quit() {
+        if worker.sink.shared.should_quit() {
             return;
         }
         match message {
             PacketMessage::Packet(generation, packet) => {
+                let sink = &worker.sink;
                 if generation != sink.generation || sink.shared.is_stale(generation) {
                     continue;
                 }
@@ -118,47 +134,83 @@ fn run(setup: Setup) {
                 generation,
                 target,
                 exact_target,
-            } => {
-                sink.generation = generation;
-                sink.exact_target = exact_target;
-                sink.fill_from = Some(target);
-                sink.control.clear();
-                sink.anchored = None;
-                sink.previous_anchor = None;
-                sink.shared.audio_anchor.store(None);
-                if let Some(decoder) = &mut worker.decoder {
-                    decoder.flush();
-                }
-            }
+            } => worker.flush(generation, target, exact_target),
             PacketMessage::End(generation) => {
-                if generation == sink.generation {
+                if generation == worker.sink.generation {
                     worker.decode(None);
                     let _ = setup.events.send(Event::AudioEnded(generation));
                 }
             }
-            PacketMessage::SetStream(params) => worker.set_stream(params),
+            PacketMessage::SetStreams(params) => worker.set_streams(params),
         }
     }
 }
 
 impl Worker {
-    fn set_stream(&mut self, params: Option<StreamParams>) {
-        self.params = params;
-        self.rebuild_decoder();
+    fn set_streams(&mut self, params: Vec<(StreamIndex, StreamParams)>) {
+        self.tracks = params
+            .into_iter()
+            .map(|(stream, params)| Track {
+                stream,
+                params,
+                decoder: None,
+            })
+            .collect();
+        self.rebuild_decoders();
     }
 
-    fn rebuild_decoder(&mut self) {
-        let effects = self.sink.shared.audio_effects.load();
-        self.decoder = self
-            .params
-            .as_ref()
-            .and_then(|p| p.try_clone().ok())
-            .and_then(|p| AudioDecoder::new(p, self.target.clone(), effects).ok());
+    fn rebuild_decoders(&mut self) {
+        let speed = self.sink.shared.speed.load();
+        for track in &mut self.tracks {
+            let edit = self.edits.get(track.stream);
+            let effects = AudioEffects {
+                speed,
+                gain: edit.gain,
+                equalizer: edit.equalizer,
+                ..AudioEffects::default()
+            };
+            track.decoder =
+                track.params.try_clone().ok().and_then(|params| {
+                    AudioDecoder::new(params, self.target.clone(), effects).ok()
+                });
+        }
+        self.mixer.set_track_count(self.tracks.len());
+        self.apply_weights();
         self.sink.anchored = None;
         self.sink.previous_anchor = None;
         // Without a decoder no anchor will come; the player must not wait for one.
-        let available = self.decoder.is_some();
+        let available = self.tracks.iter().any(|track| track.decoder.is_some());
         let _ = self.events.send(Event::AudioDecoder { available });
+    }
+
+    /// Picks up new editor edits: removed tracks stay in the mix silently, to keep time.
+    fn refresh_edits(&mut self) {
+        if let Some(edits) = self.sink.shared.audio_edits_since(&mut self.edits_version) {
+            self.edits = edits;
+            self.apply_weights();
+        }
+    }
+
+    fn apply_weights(&mut self) {
+        for (slot, track) in self.tracks.iter().enumerate() {
+            let removed = self.edits.get(track.stream).is_removed();
+            self.mixer.set_weight(slot, if removed { 0.0 } else { 1.0 });
+        }
+    }
+
+    fn flush(&mut self, generation: Generation, target: Ticks, exact_target: Option<Ticks>) {
+        let sink = &mut self.sink;
+        sink.generation = generation;
+        sink.exact_target = exact_target;
+        sink.fill_from = Some(target);
+        sink.control.clear();
+        sink.anchored = None;
+        sink.previous_anchor = None;
+        sink.shared.audio_anchor.store(None);
+        for decoder in self.tracks.iter_mut().filter_map(|t| t.decoder.as_mut()) {
+            decoder.flush();
+        }
+        self.mixer.reset();
     }
 
     /// Reopens the default device after the current one disappeared (e.g. headphones
@@ -181,21 +233,58 @@ impl Worker {
         self.sink.control = control;
         self.sink.shared.audio_anchor.store(None);
         self.target = AudioTarget::playback(format.sample_rate.0, format.channels);
-        self.rebuild_decoder();
+        self.mixer = Mixer::new(format.channels, format.sample_rate, self.tracks.len());
+        self.rebuild_decoders();
     }
 
-    fn decode(&mut self, packet: Option<&media::Packet>) {
+    /// Decodes a packet of one track, or the end of every track, and plays whatever the mix
+    /// has ready.
+    fn decode(&mut self, packet: Option<&Packet>) {
         self.recover_device();
-        let Some(decoder) = &mut self.decoder else {
+        self.refresh_edits();
+        let speed = self.sink.shared.speed.load();
+        match packet {
+            Some(packet) => {
+                let stream = packet.stream_index();
+                if let Some(slot) = self.tracks.iter().position(|t| t.stream == stream) {
+                    self.decode_track(slot, Some(packet));
+                }
+            }
+            None => {
+                for slot in 0..self.tracks.len() {
+                    self.decode_track(slot, None);
+                }
+                self.mixer.finish();
+            }
+        }
+        while let Some(mixed) = self.mixer.pop(MIX_LAG_LIMIT) {
+            if !self.sink.play(speed, mixed.pts, &mixed.samples) {
+                return;
+            }
+        }
+    }
+
+    fn decode_track(&mut self, slot: usize, packet: Option<&Packet>) {
+        let speed = self.sink.shared.speed.load();
+        let Some(track) = self.tracks.get_mut(slot) else {
             return;
         };
-        let effects: AudioEffects = self.sink.shared.audio_effects.load();
-        decoder.set_effects(effects);
+        let edit = self.edits.get(track.stream);
+        let Some(decoder) = &mut track.decoder else {
+            return;
+        };
+        decoder.set_effects(AudioEffects {
+            speed,
+            gain: edit.gain,
+            equalizer: edit.equalizer,
+            ..AudioEffects::default()
+        });
         loop {
             let accepted = decoder.send(packet).unwrap_or(true);
             while let Ok(Some(frame)) = decoder.receive() {
-                if !self.sink.play(effects, &frame) {
-                    return;
+                if let Some(pts) = frame.pts {
+                    let pts = pts - self.sink.start_time;
+                    self.mixer.push(slot, pts, frame.samples(), speed);
                 }
             }
             if accepted || self.sink.shared.is_stale(self.sink.generation) {
@@ -206,15 +295,13 @@ impl Worker {
 }
 
 impl Sink {
-    /// Queues one frame for the device. Returns `false` if a seek made the work stale.
-    fn play(&mut self, effects: AudioEffects, frame: &AudioFrame) -> bool {
-        let channels = usize::from(self.control.format().channels);
+    /// Queues mixed samples that start at media time `pts`. Returns `false` if a seek made
+    /// the work stale.
+    fn play(&mut self, speed: media::Speed, pts: Ticks, samples: &[f32]) -> bool {
+        let channels = usize::from(self.control.format().channels).max(1);
         let rate = self.control.format().sample_rate;
-        let speed = effects.speed;
-        let Some(mut pts) = frame.pts.map(|pts| pts - self.start_time) else {
-            return true;
-        };
-        let mut samples = frame.samples();
+        let mut pts = pts;
+        let mut samples = samples;
         if let Some(target) = self.exact_target {
             let frames = samples.len() / channels;
             let skip = frames_for(rate, speed.media_to_wall(target - pts)).min(frames as u64);

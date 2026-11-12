@@ -13,5 +13,4 @@ mod verify;
 pub use error::ExportError;
 pub use job::{ExportJob, ExportRequest, ExportResult, Progress, run};
 pub use naming::{suggested_output, unique_path};
-pub use remux::{AudioChanges, AudioTracks};
 pub use smart::smart_cut_support;
