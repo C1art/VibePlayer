@@ -3,9 +3,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
+use cut::StreamIndex;
 use cut::{Ticks, TrimRequest};
-use export::{AudioChanges, AudioTracks, ExportError, ExportRequest};
-use media::{Decibels, Demuxer, Packet, StreamKind};
+use export::{ExportError, ExportRequest};
+use media::{AudioEdits, Decibels, Demuxer, Packet, StreamKind, TrackEdit, TrackKeep};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -42,11 +43,28 @@ fn plan(source: &Path, start_seconds: f64, end_seconds: f64) -> cut::CutPlan {
     request.plan(keyframe).unwrap()
 }
 
+/// The same edit on every audio track of `source`.
+fn every_track(source: &Path, edit: TrackEdit) -> AudioEdits {
+    let info = media::probe(source).unwrap();
+    let mut edits = AudioEdits::default();
+    for stream in info.streams_of(StreamKind::Audio) {
+        edits.set(stream.index, edit);
+    }
+    edits
+}
+
+fn gain(tenths: i16) -> TrackEdit {
+    TrackEdit {
+        gain: Decibels(tenths),
+        ..TrackEdit::default()
+    }
+}
+
 fn export(
     source: &Path,
     out: &Path,
     plan: cut::CutPlan,
-    audio: AudioChanges,
+    audio: AudioEdits,
 ) -> Result<export::ExportResult, ExportError> {
     let request = ExportRequest {
         source: source.to_path_buf(),
@@ -78,7 +96,7 @@ fn copied_video_packets_are_byte_identical_to_the_source() {
     let source = fixture("h264_bframes.mp4");
     let out = output("bytes.mp4");
     let plan = plan(&source, 1.3, 3.0);
-    let result = export(&source, &out, plan, AudioChanges::default()).unwrap();
+    let result = export(&source, &out, plan, AudioEdits::default()).unwrap();
     assert!(!result.reencoded_audio);
     let expected = video_payloads(&source, |p| plan.keeps_primary(p.pts().unwrap(), p.dts()));
     let written = video_payloads(&out, |_| true);
@@ -97,7 +115,7 @@ fn transport_streams_with_b_frames_start_on_the_keyframe() {
     let source = fixture("h264_bframes.ts");
     let out = output("bframes.ts");
     let plan = plan(&source, 1.3, 2.6);
-    export(&source, &out, plan, AudioChanges::default()).unwrap();
+    export(&source, &out, plan, AudioEdits::default()).unwrap();
     let expected = video_payloads(&source, |p| plan.keeps_primary(p.pts().unwrap(), p.dts()));
     assert_eq!(video_payloads(&out, |_| true), expected);
 }
@@ -112,7 +130,7 @@ fn a_subtitle_running_past_the_end_stops_there() {
         &source,
         &out,
         plan(&source, 0.5, 2.5),
-        AudioChanges::default(),
+        AudioEdits::default(),
     )
     .unwrap();
     let mut demuxer = Demuxer::open(&out).unwrap();
@@ -137,7 +155,7 @@ fn every_stream_survives_the_cut() {
         &source,
         &out,
         plan(&source, 1.0, 3.5),
-        AudioChanges::default(),
+        AudioEdits::default(),
     )
     .unwrap();
     let info = media::probe(&out).unwrap();
@@ -158,7 +176,7 @@ fn cover_art_survives_a_cut_that_starts_later() {
         &source,
         &out,
         plan(&source, 1.0, 1.8),
-        AudioChanges::default(),
+        AudioEdits::default(),
     )
     .unwrap();
     let info = media::probe(&out).unwrap();
@@ -174,10 +192,7 @@ fn volume_changes_reencode_only_the_audio() {
     let source = fixture("h264_bframes.mp4");
     let out = output("louder.mp4");
     let plan = plan(&source, 0.0, 2.0);
-    let changes = AudioChanges {
-        gain: Decibels(60),
-        ..AudioChanges::default()
-    };
+    let changes = every_track(&source, gain(60));
     let result = export(&source, &out, plan, changes).unwrap();
     assert!(result.reencoded_audio);
     let expected = video_payloads(&source, |p| plan.keeps_primary(p.pts().unwrap(), p.dts()));
@@ -195,11 +210,11 @@ fn removed_audio_leaves_only_the_other_streams_copied() {
     let source = fixture("multi_audio.mkv");
     let out = output("silent.mkv");
     let plan = plan(&source, 0.5, 3.0);
-    let changes = AudioChanges {
-        gain: Decibels(60),
-        tracks: AudioTracks::Remove,
-        ..AudioChanges::default()
+    let removed = TrackEdit {
+        keep: TrackKeep::Remove,
+        ..gain(60)
     };
+    let changes = every_track(&source, removed);
     let result = export(&source, &out, plan, changes).unwrap();
     assert!(!result.reencoded_audio);
     let info = media::probe(&out).unwrap();
@@ -210,15 +225,67 @@ fn removed_audio_leaves_only_the_other_streams_copied() {
 
 #[test]
 #[ignore]
+fn removing_one_track_keeps_the_others() {
+    let source = fixture("multi_audio.mkv");
+    let out = output("one_track.mkv");
+    let mut changes = AudioEdits::default();
+    let removed = TrackEdit {
+        keep: TrackKeep::Remove,
+        ..TrackEdit::default()
+    };
+    changes.set(StreamIndex(1), removed);
+    let result = export(&source, &out, plan(&source, 0.5, 3.0), changes).unwrap();
+    assert!(!result.reencoded_audio);
+    let info = media::probe(&out).unwrap();
+    let languages: Vec<_> = info
+        .streams_of(StreamKind::Audio)
+        .map(|s| s.language.clone())
+        .collect();
+    assert_eq!(languages, [Some("ger".into())]);
+}
+
+#[test]
+#[ignore]
+fn editing_one_track_leaves_the_others_copied() {
+    let source = fixture("multi_audio.mkv");
+    let out = output("one_edited.mkv");
+    let mut changes = AudioEdits::default();
+    changes.set(StreamIndex(1), gain(-60));
+    let result = export(&source, &out, plan(&source, 0.5, 3.0), changes).unwrap();
+    assert!(result.reencoded_audio);
+    let source_german = payloads(&source, StreamIndex(2));
+    let copied_german = payloads(&out, StreamIndex(2));
+    assert!(!copied_german.is_empty());
+    assert!(copied_german.iter().all(|p| source_german.contains(p)));
+    let source_english = payloads(&source, StreamIndex(1));
+    let reencoded_english = payloads(&out, StreamIndex(1));
+    assert!(!reencoded_english.iter().all(|p| source_english.contains(p)));
+}
+
+/// Packet payloads of one stream, in file order.
+fn payloads(path: &Path, stream: StreamIndex) -> Vec<Vec<u8>> {
+    let mut demuxer = Demuxer::open(path).unwrap();
+    demuxer.select_streams(&[stream]);
+    let mut packet = Packet::new().unwrap();
+    let mut payloads = Vec::new();
+    while demuxer.read(&mut packet).unwrap() {
+        payloads.push(packet.data().to_vec());
+    }
+    payloads
+}
+
+#[test]
+#[ignore]
 fn reencoded_audio_is_cut_to_the_sample() {
     let source = fixture("h264_bframes.mp4");
     let out = output("trimmed_audio.mp4");
-    let changes = AudioChanges {
-        gain: Decibels(-30),
-        ..AudioChanges::default()
-    };
+    let changes = every_track(&source, gain(-30));
     export(&source, &out, plan(&source, 1.0, 3.0), changes).unwrap();
-    let samples = decoded_audio_samples(&out);
+    let stream = Demuxer::open(&out)
+        .unwrap()
+        .best_stream(StreamKind::Audio)
+        .unwrap();
+    let samples = decoded_audio_samples(&out, stream);
     // Two seconds at 48 kHz; AAC can't end mid-frame, so allow the padding of one frame.
     assert!((96_000..96_000 + 1_024).contains(&samples), "{samples}");
 }
@@ -229,18 +296,17 @@ fn reencoded_audio_in_matroska_keeps_its_length() {
     // Matroska's millisecond timebase differs from the sample rate, unlike MP4's audio.
     let source = fixture("multi_audio.mkv");
     let out = output("trimmed_audio.mkv");
-    let changes = AudioChanges {
-        gain: Decibels(-30),
-        ..AudioChanges::default()
-    };
+    let changes = every_track(&source, gain(-30));
     export(&source, &out, plan(&source, 0.5, 3.0), changes).unwrap();
-    let samples = decoded_audio_samples(&out);
-    assert!((143_000..146_000).contains(&samples), "{samples}");
+    let info = media::probe(&out).unwrap();
+    for stream in info.streams_of(StreamKind::Audio) {
+        let samples = decoded_audio_samples(&out, stream.index);
+        assert!((143_000..146_000).contains(&samples), "{samples}");
+    }
 }
 
-fn decoded_audio_samples(path: &Path) -> u64 {
+fn decoded_audio_samples(path: &Path, stream: StreamIndex) -> u64 {
     let mut demuxer = Demuxer::open(path).unwrap();
-    let stream = demuxer.best_stream(StreamKind::Audio).unwrap();
     demuxer.select_streams(&[stream]);
     let target = media::AudioTarget {
         sample_format: "flt".into(),
@@ -278,7 +344,7 @@ fn interlaced_transport_streams_and_open_gop_hevc_export() {
             &source,
             &out,
             plan(&source, 0.5, 1.8),
-            AudioChanges::default(),
+            AudioEdits::default(),
         )
         .unwrap_or_else(|e| panic!("{name}: {e}"));
     }
@@ -292,7 +358,7 @@ fn the_source_is_never_overwritten() {
         &source,
         &source,
         plan(&source, 0.0, 1.0),
-        AudioChanges::default(),
+        AudioEdits::default(),
     );
     assert!(matches!(result, Err(ExportError::WouldOverwriteSource(_))));
 }

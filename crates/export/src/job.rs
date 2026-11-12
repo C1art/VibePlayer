@@ -7,9 +7,11 @@ use std::thread;
 use crossbeam::channel::{self, Receiver};
 use cut::{CutPlan, Ticks, Timebase};
 
+use media::AudioEdits;
+
 use crate::ExportError;
 use crate::naming::temp_path;
-use crate::remux::{AudioChanges, remux};
+use crate::remux::remux;
 use crate::verify::verify;
 
 #[derive(Clone, Debug)]
@@ -17,7 +19,8 @@ pub struct ExportRequest {
     pub source: PathBuf,
     pub output: PathBuf,
     pub plan: CutPlan,
-    pub audio: AudioChanges,
+    /// Audio tracks without an edit are copied.
+    pub audio: AudioEdits,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -125,7 +128,7 @@ pub fn run(
         &request.source,
         &temp,
         &request.plan,
-        request.audio,
+        &request.audio,
         cancel,
         progress,
     )

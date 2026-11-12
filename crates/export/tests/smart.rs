@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use cut::{Ticks, Timebase, TrimRequest};
-use export::{AudioChanges, ExportRequest, ExportResult};
+use export::{ExportRequest, ExportResult};
 use media::{Demuxer, HardwareDecoding, Packet, StreamKind, VideoDecoder, VideoOptions};
 
 fn fixture(name: &str) -> PathBuf {
@@ -88,7 +88,7 @@ fn smart_cut(name: &str, start: f64, end: f64, out: &str) -> (PathBuf, ExportRes
         source,
         output: output.clone(),
         plan,
-        audio: AudioChanges::default(),
+        audio: media::AudioEdits::default(),
     };
     let result = export::run(&request, &AtomicBool::new(false), &|_| {}).unwrap();
     (output, result)
@@ -196,7 +196,7 @@ fn smart_cut_refuses_codecs_it_cannot_encode() {
         source,
         output: output("refused.ts"),
         plan,
-        audio: AudioChanges::default(),
+        audio: media::AudioEdits::default(),
     };
     let result = export::run(&request, &AtomicBool::new(false), &|_| {});
     assert!(

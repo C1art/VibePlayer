@@ -2,7 +2,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use cut::{Ticks, Timebase, TrimRequest};
-use export::{AudioChanges, ExportRequest};
+use export::ExportRequest;
 use media::{Demuxer, Packet, StreamKind, ThumbnailExtractor, VideoDecoder, VideoOptions};
 use playback::{Player, SeekMode};
 
@@ -149,13 +149,9 @@ fn export_speed() {
         .unwrap_or(10);
     let reencode = std::env::var("PLAY_BENCH_AUDIO_REENCODE").is_ok_and(|v| v == "1");
     let smart = std::env::var("PLAY_BENCH_SMART_CUT").is_ok_and(|v| v == "1");
-    let audio = if reencode {
-        AudioChanges {
-            gain: media::Decibels(30),
-            ..AudioChanges::default()
-        }
-    } else {
-        AudioChanges::default()
+    let louder = media::TrackEdit {
+        gain: media::Decibels(30),
+        ..media::TrackEdit::default()
     };
     println!(
         "export of {segments} trims per file (ms each; audio re-encode: {reencode}; smart cut: {smart})"
@@ -173,6 +169,12 @@ fn export_speed() {
         let (Some(timebase), Some(duration)) = (demuxer.timebase(stream), info.duration) else {
             continue;
         };
+        let mut audio = media::AudioEdits::default();
+        if reencode {
+            for track in info.streams_of(StreamKind::Audio) {
+                audio.set(track.index, louder);
+            }
+        }
         let mut samples = Vec::new();
         for segment in 0..segments {
             let at = |t: i64| (Ticks(t) + info.start_time).rescale(Timebase::MICROS, timebase);
@@ -204,7 +206,7 @@ fn export_speed() {
                 source: path.clone(),
                 output: output.clone(),
                 plan,
-                audio,
+                audio: audio.clone(),
             };
             match export::run(&request, &AtomicBool::new(false), &|_| {}) {
                 Ok(_) => samples.push(millis(start.elapsed())),

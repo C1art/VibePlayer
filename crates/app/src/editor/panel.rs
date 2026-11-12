@@ -5,7 +5,7 @@ use eframe::egui::{self, Align, Layout, Rect, RichText, pos2, vec2};
 use media::Decibels;
 use playback::SeekMode;
 
-use export::AudioTracks;
+use media::TrackKeep;
 
 use super::Editor;
 use super::timeline::Timeline;
@@ -351,22 +351,22 @@ fn audio_card(
     slider_rows: usize,
     actions: &mut Vec<EditorAction>,
 ) {
-    let changes = editor.audio_changes();
+    let changes = editor.track_edit();
     let note = match (editor.audio_tracks, changes.reencodes()) {
-        (AudioTracks::Remove, _) => ("Removed from the clip", theme::keyframe()),
-        (AudioTracks::Keep, true) => ("Re-encoded for volume and EQ", theme::smart()),
-        (AudioTracks::Keep, false) => ("Copied untouched", theme::TEXT_DIM),
+        (TrackKeep::Remove, _) => ("Removed from the clip", theme::keyframe()),
+        (TrackKeep::Keep, true) => ("Re-encoded for volume and EQ", theme::smart()),
+        (TrackKeep::Keep, false) => ("Copied untouched", theme::TEXT_DIM),
     };
     card_title(ui, "Audio", Some(note));
-    let mut removed = editor.audio_tracks == AudioTracks::Remove;
+    let mut removed = editor.audio_tracks == TrackKeep::Remove;
     if widgets::toggle(ui, &mut removed, "Remove audio")
         .on_hover_text("Export the clip without sound; the preview plays silently")
         .changed()
     {
         editor.audio_tracks = if removed {
-            AudioTracks::Remove
+            TrackKeep::Remove
         } else {
-            AudioTracks::Keep
+            TrackKeep::Keep
         };
         editor.result = None;
         actions.push(EditorAction::AudioChanged);
