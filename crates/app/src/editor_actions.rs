@@ -32,10 +32,8 @@ impl VibePlayerApp {
             return;
         };
         let saved = self.history.cut_session(&opened.info.path);
-        // The waveform shows the track being heard, or the first of a mix.
-        let heard = opened
-            .audio
-            .and_then(|selection| selection.streams(&opened.info).first().copied());
+        // The editor starts on what is being heard: every track, or the one picked.
+        let heard = opened.audio.unwrap_or(playback::AudioSelection::All);
         match Editor::new(&opened.info, heard, saved, &self.settings.editor, ctx) {
             Some(editor) => {
                 editor.preview_audio(&mut session.player);

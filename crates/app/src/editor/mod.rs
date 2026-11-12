@@ -1,5 +1,7 @@
 //! The bare-bones trim editor: in/out points, volume, a three-band EQ, lossless export.
 
+mod audio_card;
+mod audio_edits;
 mod keyframes;
 mod panel;
 mod timeline;
@@ -10,14 +12,15 @@ use std::path::{Path, PathBuf};
 use cut::{CutPlan, StreamIndex, Ticks, Timebase, TrimRequest};
 use eframe::egui;
 use export::{ExportJob, ExportRequest, ExportResult};
-use library::{CutSession, EditorPreferences, log};
-use media::{AudioEdits, TrackEdit, TrackKeep};
-use media::{Decibels, Equalizer, MediaInfo, StreamKind};
+use library::{CutSession, EditorPreferences, TrackSession, log};
+use media::{AudioEdits, MediaInfo, StreamKind};
+use playback::AudioSelection;
 
 use crate::os::PendingDialog;
 
 pub use panel::{EditorAction, height, show as show_panel};
 
+use audio_edits::{describe_audio, track_edit};
 use keyframes::{KeyframeFinder, KeyframeIndex};
 use waveform::Waveform;
 
@@ -31,15 +34,20 @@ pub struct Editor {
     duration: Ticks,
     pub start: Ticks,
     pub end: Ticks,
-    pub gain: Decibels,
-    pub equalizer: Equalizer,
-    pub audio_tracks: TrackKeep,
     audio_streams: Vec<StreamIndex>,
+    /// What to call each track in `audio_streams`: a short name and a full description.
+    audio_labels: Vec<(String, String)>,
+    audio: AudioEdits,
+    /// The track being heard and edited, or all of them at once.
+    audio_view: AudioSelection,
     keyframes: KeyframeFinder,
     index: KeyframeIndex,
     waveform: Option<Waveform>,
-    /// The audio track to draw, once the keyframe scan is done with the disk.
-    waveform_pending: Option<StreamIndex>,
+    /// Waits for the keyframe scan to be done with the disk.
+    waveform_pending: bool,
+    /// The waveform of the tracks in view, redone when they or their edits change.
+    waveform_view: Vec<f32>,
+    waveform_view_stale: bool,
     repaint: egui::Context,
     pub snap_to_keyframes: bool,
     /// Playing the selection, which stops at the end point.
@@ -53,11 +61,11 @@ pub struct Editor {
 }
 
 impl Editor {
-    /// `None` for files without a video or audio stream to cut on.
-    /// `audio` is the track to draw a waveform for, usually the one playing.
+    /// `None` for files without a video or audio stream to cut on. `audio_view` is what the
+    /// player is playing: every track, or one.
     pub fn new(
         info: &MediaInfo,
-        audio: Option<StreamIndex>,
+        audio_view: AudioSelection,
         session: Option<&CutSession>,
         preferences: &EditorPreferences,
         repaint: &egui::Context,
@@ -76,17 +84,30 @@ impl Editor {
             duration,
             start: Ticks::ZERO,
             end: duration,
-            gain: Decibels(0),
-            equalizer: Equalizer::default(),
-            audio_tracks: TrackKeep::Keep,
             audio_streams: info
                 .streams_of(StreamKind::Audio)
                 .map(|stream| stream.index)
                 .collect(),
+            audio_labels: info
+                .streams_of(StreamKind::Audio)
+                .map(|stream| {
+                    let short = match &stream.language {
+                        Some(language) => {
+                            format!("#{} · {}", stream.index.0, language.to_uppercase())
+                        }
+                        None => format!("Track #{}", stream.index.0),
+                    };
+                    (short, crate::controls::track_label(stream))
+                })
+                .collect(),
+            audio: AudioEdits::default(),
+            audio_view,
             keyframes: KeyframeFinder::new(info.path.clone(), primary.index, repaint.clone()),
             index: KeyframeIndex::new(info.path.clone(), primary.index, repaint.clone()),
             waveform: None,
-            waveform_pending: audio,
+            waveform_pending: true,
+            waveform_view: Vec::new(),
+            waveform_view_stale: true,
             repaint: repaint.clone(),
             snap_to_keyframes: preferences.snap_to_keyframes,
             previewing: false,
@@ -103,15 +124,12 @@ impl Editor {
             editor.end = editor
                 .to_position(session.end)
                 .clamp(editor.start, duration);
-            editor.gain = Decibels(session.gain);
-            let [bass, mid, treble] = session.equalizer;
-            editor.equalizer = Equalizer {
-                bass: Decibels(bass),
-                mid: Decibels(mid),
-                treble: Decibels(treble),
-            };
-            if session.remove_audio {
-                editor.audio_tracks = TrackKeep::Remove;
+            let streams: Vec<usize> = editor.audio_streams.iter().map(|s| s.0).collect();
+            for track in session.track_edits(&streams) {
+                let stream = StreamIndex(track.stream);
+                if editor.audio_streams.contains(&stream) {
+                    editor.audio.set(stream, track_edit(&track));
+                }
             }
         }
         Some(editor)
@@ -152,16 +170,8 @@ impl Editor {
     }
 
     /// Peak loudness per equal slice of the file, while it's being computed too.
-    pub fn waveform(&self) -> &[f32] {
-        self.waveform.as_ref().map_or(&[], Waveform::peaks)
-    }
-
     pub fn waveform_complete(&self) -> bool {
-        self.waveform_pending.is_none() && self.waveform.as_ref().is_none_or(Waveform::is_complete)
-    }
-
-    pub fn keyframes_complete(&self) -> bool {
-        self.index.is_complete()
+        !self.waveform_pending && self.waveform.as_ref().is_none_or(Waveform::is_complete)
     }
 
     /// Moves the start, snapping to the nearest keyframe when snapping is on.
@@ -207,28 +217,6 @@ impl Editor {
         self.result = None;
     }
 
-    /// The edit every audio track gets.
-    pub fn track_edit(&self) -> TrackEdit {
-        TrackEdit {
-            gain: self.gain,
-            equalizer: self.equalizer,
-            keep: self.audio_tracks,
-        }
-    }
-
-    pub fn audio_changes(&self) -> AudioEdits {
-        let mut edits = AudioEdits::default();
-        for stream in &self.audio_streams {
-            edits.set(*stream, self.track_edit());
-        }
-        edits
-    }
-
-    /// Lets the player be heard as the export will be: with the gain and EQ, or silent.
-    pub fn preview_audio(&self, player: &mut playback::Player) {
-        player.set_audio_edits(self.audio_changes());
-    }
-
     fn request(&self) -> TrimRequest {
         TrimRequest {
             stream: self.stream,
@@ -266,13 +254,23 @@ impl Editor {
             timebase: self.timebase,
             start: self.to_stream(self.start),
             end: self.to_stream(self.end),
-            gain: self.gain.0,
-            equalizer: [
-                self.equalizer.bass.0,
-                self.equalizer.mid.0,
-                self.equalizer.treble.0,
-            ],
-            remove_audio: self.audio_tracks == TrackKeep::Remove,
+            gain: 0,
+            equalizer: [0; 3],
+            remove_audio: false,
+            tracks: self
+                .audio
+                .iter()
+                .map(|(stream, edit)| TrackSession {
+                    stream: stream.0,
+                    gain: edit.gain.0,
+                    equalizer: [
+                        edit.equalizer.bass.0,
+                        edit.equalizer.mid.0,
+                        edit.equalizer.treble.0,
+                    ],
+                    remove: edit.is_removed(),
+                })
+                .collect(),
             saved_at: now,
         }
     }
@@ -316,17 +314,13 @@ impl Editor {
             plan.end.0,
             plan.stream.0,
             plan.reencode.map_or(0, |head| head.frames),
-            match (self.audio_tracks, self.track_edit().reencodes()) {
-                (TrackKeep::Remove, _) => "removed",
-                (TrackKeep::Keep, true) => "re-encoded",
-                (TrackKeep::Keep, false) => "copied",
-            }
+            describe_audio(&self.audio)
         ));
         self.export = Some(ExportJob::start(ExportRequest {
             source: self.source.clone(),
             output,
             plan,
-            audio: self.audio_changes(),
+            audio: self.audio.clone(),
         }));
     }
 
@@ -340,18 +334,21 @@ impl Editor {
     pub fn poll(&mut self) -> bool {
         let mut changed = self.index.poll();
         // One scan at a time: on a hard disk two would make each other seek.
-        if self.index.is_complete()
-            && let Some(stream) = self.waveform_pending.take()
-        {
+        if self.index.is_complete() && self.waveform_pending {
+            self.waveform_pending = false;
             self.waveform = Some(Waveform::new(
                 self.source.clone(),
-                stream,
+                self.audio_streams.clone(),
                 self.duration,
                 self.repaint.clone(),
             ));
         }
         if let Some(waveform) = &mut self.waveform {
-            changed |= waveform.poll();
+            self.waveform_view_stale |= waveform.poll();
+        }
+        if self.waveform_view_stale {
+            self.refresh_waveform_view();
+            changed = true;
         }
         if let Some(dialog) = &self.save_dialog
             && let Some(choice) = dialog.poll()
